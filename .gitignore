@@ -6,10 +6,11 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 
-# Data & outputs (cached arrays, downloads, experiment artifacts)
-data/*
-!data/.gitkeep
-outputs/
+# Data & outputs at repo root only (cached arrays, downloads, experiment artifacts);
+# patterns are anchored so the solarflare/data package stays tracked.
+/data/*
+!/data/.gitkeep
+/outputs/
 
 # Notebooks checkpoints
 notebooks/.ipynb_checkpoints/
