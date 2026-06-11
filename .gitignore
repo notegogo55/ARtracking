@@ -7,9 +7,9 @@ __pycache__/
 .ruff_cache/
 
 # Data & outputs (cached arrays, downloads, experiment artifacts)
-data/
-outputs/
+data/*
 !data/.gitkeep
+outputs/
 
 # Notebooks checkpoints
 notebooks/.ipynb_checkpoints/
