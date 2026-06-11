@@ -1,0 +1,19 @@
+# Environments
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Data & outputs (cached arrays, downloads, experiment artifacts)
+data/
+outputs/
+!data/.gitkeep
+
+# Notebooks checkpoints
+notebooks/.ipynb_checkpoints/
+
+# OS / editor
+.DS_Store
+Thumbs.db

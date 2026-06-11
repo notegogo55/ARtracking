@@ -1,0 +1,91 @@
+# Default project configuration. Schema: solarflare/config.py (pydantic, extra keys forbidden).
+# Convention: all times are UTC, written as ISO-8601 naive strings.
+
+project:
+  name: solarflare-mvp
+  seed: 1337
+
+paths:
+  data_root: data
+  cache_dir: data/cache
+  outputs_dir: outputs
+  experiment_log: outputs/experiments.csv
+
+study:
+  # Walking-skeleton target: one well-instrumented AR with a clean X-class event.
+  mvp_window: ar11158_feb2011
+  # Initial study scope: well-documented Cycle 24/25 ARs + one quiet-Sun window.
+  # `harp` = JSOC HARPNUM for hmi.sharp_cea_720s cutouts. Values marked "verify"
+  # must be confirmed against the official JSOC mapping before Phase A downloads:
+  #   http://jsoc.stanford.edu/doc/data/hmi/harpnum_to_noaa/all_harps_with_noaa_ars.txt
+  windows:
+    - name: ar11158_feb2011
+      start: 2011-02-12T00:00:00
+      end: 2011-02-18T00:00:00
+      kind: active
+      targets:
+        - noaa: 11158
+          harp: 377            # canonical SHARP example region; verify anyway
+          notes: "First X-class flare of Cycle 24 (X2.2 on 2011-02-15); standard SHARP benchmark AR."
+    - name: ar11429_mar2012
+      start: 2012-03-04T00:00:00
+      end: 2012-03-10T00:00:00
+      kind: active
+      targets:
+        - noaa: 11429
+          harp: null           # resolve via JSOC mapping in Phase A
+          notes: "Major March 2012 storms; X5.4 on 2012-03-07."
+    - name: ar12192_oct2014
+      start: 2014-10-18T00:00:00
+      end: 2014-10-27T00:00:00
+      kind: active
+      targets:
+        - noaa: 12192
+          harp: 4698           # verify against JSOC mapping
+          notes: "Largest AR of Cycle 24; many X flares (e.g. X3.1 on 2014-10-24), notably CME-poor."
+    - name: ar12673_sep2017
+      start: 2017-09-03T00:00:00
+      end: 2017-09-10T00:00:00
+      kind: active
+      targets:
+        - noaa: 12673
+          harp: 7115           # verify against JSOC mapping
+          notes: "X9.3 on 2017-09-06 and X8.2 on 2017-09-10; most intense flares of Cycle 24."
+    - name: quiet_dec2019
+      start: 2019-12-01T00:00:00
+      end: 2019-12-15T00:00:00
+      kind: quiet
+      targets: []              # deep solar minimum; negative/contrast window
+    - name: ar13664_may2024
+      start: 2024-05-06T00:00:00
+      end: 2024-05-15T00:00:00
+      kind: active
+      targets:
+        - noaa: 13664
+          harp: null           # resolve via JSOC mapping in Phase A
+          notes: "Cycle 25 'Gannon storm' source region; X-flare series incl. X8.7 on 2024-05-14."
+
+data:
+  aia_channels: [94, 131, 171, 193, 211, 304, 335, 1600]  # Angstrom
+  hmi_sharp_series: hmi.sharp_cea_720s
+  sample_cadence_minutes: 60   # per-AR feature time-series cadence
+
+forecast:
+  lookback_hours: 24           # feature history fed to the model
+  lead_hours: 24               # forecast horizon; features end strictly before this window
+  flare_class_threshold: M1.0  # positive label: >= M1.0 within lead window
+  bin_hours: 24                # bin size for the climatological base rate
+
+geometry:
+  max_cm_longitude_deg: 65     # restrict ARs to +/-65 deg of central meridian
+
+split:
+  strategy: time_blocked       # time_blocked | by_rotation  (never random shuffle)
+  n_folds: 5
+  embargo_hours: 48            # gap between train/test blocks to kill autocorrelation leakage
+
+climatology:
+  # Reference period for the base-rate baseline. One full year at Cycle 24 maximum;
+  # the rate is period-dependent — widen this when the study scope grows.
+  start: 2014-01-01T00:00:00
+  end: 2015-01-01T00:00:00

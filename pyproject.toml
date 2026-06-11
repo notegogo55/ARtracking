@@ -1,0 +1,45 @@
+[project]
+name = "solarflare"
+version = "0.1.0"
+description = "Offline pipeline: track solar active regions (SDO/HMI+AIA) and forecast >=M-class flares (DeFN-style)."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = { text = "MIT" }
+authors = [{ name = "ARtracking" }]
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "matplotlib>=3.8",
+    "pyyaml>=6.0",
+    "pydantic>=2.7",
+    "typer>=0.12",
+    "sunpy[net]>=6.0",
+    "drms>=0.8",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.4",
+]
+
+[project.scripts]
+solarflare = "solarflare.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["solarflare"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

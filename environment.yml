@@ -1,0 +1,13 @@
+# Conda mirror of the project environment, for users without `uv`.
+# The authoritative, fully pinned lockfile is `uv.lock` (use `uv sync`);
+# `requirements-lock.txt` is an exported pip-compatible pin list.
+name: solarflare
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pip
+  - pip:
+      - -e .
+      - pytest>=8.0
+      - ruff>=0.4
