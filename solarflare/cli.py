@@ -554,6 +554,147 @@ def build_dataset(
     )
 
 
+@app.command("swansf-prepare")
+def swansf_prepare(
+    archive: Annotated[Path, typer.Option(exists=True, help="partitionN_instances.tar.gz")],
+    out: Annotated[Path, typer.Option(help="Output dataset dir")],
+    config: ConfigOpt = DEFAULT_CONFIG,
+    max_instances: Annotated[int | None, typer.Option(help="Subsample cap")] = None,
+) -> None:
+    """Convert a SWAN-SF partition archive into the project dataset layout.
+
+    Streams the tar.gz directly: member names contain ':' (illegal on NTFS),
+    so the archive is never extracted to disk.
+    """
+    from solarflare.forecast.swansf import prepare_archive
+
+    cfg = _load(config)
+    stats = prepare_archive(archive, out, max_instances=max_instances,
+                            seed=cfg.project.seed)
+    for key, value in stats.items():
+        typer.echo(f"{key:>18}: {value}")
+
+
+@app.command("forecast-benchmark")
+def forecast_benchmark(
+    dataset: Annotated[Path, typer.Option(exists=True, file_okay=False,
+                                          help="Dir with X.npz + samples.parquet")],
+    config: ConfigOpt = DEFAULT_CONFIG,
+    models: Annotated[
+        str, typer.Option(help="Comma list: climatology,holt_winters,lstm,ensemble")
+    ] = "climatology,holt_winters,lstm,ensemble",
+    folds: Annotated[int, typer.Option()] = 5,
+    lookback_steps: Annotated[int | None, typer.Option(
+        help="Truncate sequences to the last N steps")] = None,
+    horizon_steps: Annotated[int, typer.Option(
+        help="Holt-Winters extrapolation horizon (steps)")] = 24,
+    max_epochs: Annotated[int | None, typer.Option(help="Override LSTM epochs")] = None,
+    embargo_hours: Annotated[float | None, typer.Option(
+        help="Override split.embargo_hours (use small values for short datasets)")] = None,
+    out: Annotated[Path | None, typer.Option(help="Output dir")] = None,
+    tag: Annotated[str, typer.Option(help="Run tag for outputs/experiment log")] = "bench",
+) -> None:
+    """Gate G4: time-blocked CV metrics table (TSS primary) + reliability diagram."""
+    import numpy as np
+    import pandas as pd
+
+    from solarflare.forecast.validate import (
+        aggregate_table,
+        crossval_table,
+        reliability_plot,
+    )
+
+    cfg = _load(config)
+    data = np.load(dataset / "X.npz", allow_pickle=False)
+    X = data["X"]
+    feature_names = [str(n) for n in data["feature_names"]]
+    samples = pd.read_parquet(dataset / "samples.parquet")
+    y = samples["label"].to_numpy(dtype=int)
+    t0s = pd.to_datetime(samples["t0"])
+    if lookback_steps:
+        X = X[:, -lookback_steps:, :]
+    out_dir = out or Path(cfg.paths.outputs_dir) / "forecast" / tag
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    lstm_overrides = {"max_epochs": max_epochs} if max_epochs else None
+    per_fold, oof = crossval_table(
+        X, y, t0s, feature_names, horizon_steps=horizon_steps, n_folds=folds,
+        embargo_hours=(embargo_hours if embargo_hours is not None
+                       else cfg.split.embargo_hours),
+        seed=cfg.project.seed,
+        model_names=tuple(m.strip() for m in models.split(",")),
+        curves_dir=out_dir / "curves", lstm_overrides=lstm_overrides,
+    )
+    if per_fold.empty:
+        typer.secho("no usable folds (embargo wiped the training data?) - "
+                    "try --embargo-hours 0 or fewer folds", fg="red")
+        raise typer.Exit(code=1)
+    per_fold.to_csv(out_dir / "metrics_per_fold.csv", index=False)
+    table = aggregate_table(per_fold)
+    table.to_csv(out_dir / "metrics_aggregate.csv", index=False)
+    reliability_plot(oof, out_dir / "reliability.png")
+
+    show_cols = ["model"] + [c for c in table.columns
+                             if c.startswith(("tss", "hss", "bss"))]
+    typer.echo(table[show_cols].round(4).to_string(index=False))
+    typer.echo(f"outputs: {out_dir}")
+    for _, row in table.iterrows():
+        append_experiment_row(
+            cfg.paths.experiment_log,
+            {"phase": "P4", "experiment": f"forecast_{tag}", "model": row["model"],
+             "dataset": str(dataset), "folds": folds,
+             "lookback_steps": lookback_steps or X.shape[1],
+             "tss_mean": round(float(row["tss_mean"]), 4),
+             "tss_std": round(float(row.get("tss_std", np.nan)), 4),
+             "hss_mean": round(float(row["hss_mean"]), 4),
+             "bss_mean": round(float(row["bss_mean"]), 4),
+             "config_hash": cfg.short_hash()},
+        )
+
+
+@app.command("forecast-sweep")
+def forecast_sweep(
+    dataset: Annotated[Path, typer.Option(exists=True, file_okay=False)],
+    config: ConfigOpt = DEFAULT_CONFIG,
+    lookbacks: Annotated[str, typer.Option(help="Comma list of step counts")] = "30,60",
+    folds: Annotated[int, typer.Option()] = 3,
+    max_epochs: Annotated[int, typer.Option()] = 15,
+    tag: Annotated[str, typer.Option()] = "sweep",
+) -> None:
+    """Look-back sweep: LSTM TSS (mean+/-std) per window length."""
+    import numpy as np
+    import pandas as pd
+
+    from solarflare.forecast.validate import aggregate_table, crossval_table
+
+    cfg = _load(config)
+    data = np.load(dataset / "X.npz", allow_pickle=False)
+    X_full = data["X"]
+    feature_names = [str(n) for n in data["feature_names"]]
+    samples = pd.read_parquet(dataset / "samples.parquet")
+    y = samples["label"].to_numpy(dtype=int)
+    t0s = pd.to_datetime(samples["t0"])
+    out_dir = Path(cfg.paths.outputs_dir) / "forecast" / tag
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    rows = []
+    for steps in [int(s) for s in lookbacks.split(",")]:
+        per_fold, _ = crossval_table(
+            X_full[:, -steps:, :], y, t0s, feature_names, horizon_steps=24,
+            n_folds=folds, embargo_hours=cfg.split.embargo_hours,
+            seed=cfg.project.seed, model_names=("lstm",),
+            curves_dir=out_dir / f"curves_{steps}",
+            lstm_overrides={"max_epochs": max_epochs},
+        )
+        agg = aggregate_table(per_fold).iloc[0]
+        rows.append({"lookback_steps": steps, "tss_mean": agg["tss_mean"],
+                     "tss_std": agg["tss_std"], "hss_mean": agg["hss_mean"]})
+        typer.echo(f"lookback {steps:>3} steps: TSS {agg['tss_mean']:.4f} "
+                   f"+/- {agg['tss_std']:.4f}")
+    pd.DataFrame(rows).to_csv(out_dir / "lookback_sweep.csv", index=False)
+    typer.echo(f"sweep table: {out_dir / 'lookback_sweep.csv'}")
+
+
 @app.command("qa-overlay")
 def qa_overlay(
     sample_dir: Annotated[Path, typer.Option("--sample-dir", exists=True, file_okay=False)],
