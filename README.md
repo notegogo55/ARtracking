@@ -88,6 +88,14 @@ per-frame WCS reprojection, which performs the same rotation/plate-scale
 alignment for cutouts; CCD degradation correction is deferred until windows
 span years (single-AR windows are unaffected).
 
+**Gate G1 closed 2026-06-11**: one `fetch` command built the AR 11158 sample
+(2011-02-14 00:00 → 02-15 12:00, 181 frames, patch 377×744 px, 10 aligned
+stacks ≈ 1.9 GB). Labels include the documented M6.6/M2.2/X2.2 sequence
+(X2.2 peak 2011-02-15 01:56). QA: 50/1810 frame-channel entries flagged
+(37 = sparse AIA 1700 coverage, 6 = HMI QUALITY≠0, 7 = single EXPTIME=0
+AIA timestamp). Overlay at the X-flare frame shows EUV flare loops tracing
+the polarity-inversion line between the B_los contours — aligned.
+
 ## Baseline (Gate G1): climatological base rate
 
 `solarflare base-rate` computes the fraction of 24 h bins containing a ≥M1.0
