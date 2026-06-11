@@ -880,6 +880,44 @@ def render_video(
     typer.echo(f"video: {path}")
 
 
+@app.command("render-dashboard")
+def render_dashboard_cmd(
+    window: Annotated[str, typer.Option("--window", "-w")],
+    config: ConfigOpt = DEFAULT_CONFIG,
+    dataset: Annotated[Path, typer.Option(
+        help="Sequence dataset used to fit the probability model")] = Path(
+        "data/datasets/seq_v1"),
+    model: Annotated[str, typer.Option(help="holt_winters | lstm")] = "holt_winters",
+    fps: Annotated[int, typer.Option()] = 4,
+    out: Annotated[Path | None, typer.Option()] = None,
+) -> None:
+    """Full-disk per-AR flare-probability dashboard: PNG frames + MP4 clip."""
+    import numpy as np
+    import pandas as pd
+
+    from solarflare.forecast.validate import fit_model, make_models
+    from solarflare.viz.dashboard import render_dashboard
+
+    cfg = _load(config)
+    data = np.load(dataset / "X.npz", allow_pickle=False)
+    X = data["X"]
+    names = [str(n) for n in data["feature_names"]]
+    samples = pd.read_parquet(dataset / "samples.parquet")
+    y = samples["label"].to_numpy(dtype=int)
+    order = np.argsort(pd.to_datetime(samples["t0"]).to_numpy(), kind="stable")
+    cut = max(int(0.8 * len(order)), 1)
+    factories = make_models(names, horizon_steps=X.shape[1], seed=cfg.project.seed)
+    fitted = fit_model(factories[model], X[order[:cut]], y[order[:cut]],
+                       X[order[cut:]], y[order[cut:]])
+    note = (f"model: {model} fitted on {dataset.name} "
+            f"(n={len(samples)}, pos={int(y.sum())})"
+            + ("  [MVP - anecdotal sample size]" if len(samples) < 200 else ""))
+    out_dir = out or Path(cfg.paths.outputs_dir) / "dashboard" / window
+    mp4, n = render_dashboard(cfg, window, out_dir, fitted, note, fps=fps)
+    typer.echo(f"clip:   {mp4}  ({n} frames)")
+    typer.echo(f"frames: {out_dir / 'frames'}")
+
+
 @app.command("qa-overlay")
 def qa_overlay(
     sample_dir: Annotated[Path, typer.Option("--sample-dir", exists=True, file_okay=False)],
