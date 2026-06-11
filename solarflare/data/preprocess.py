@@ -60,16 +60,20 @@ def match_nearest(
 
 
 def exposure_normalize(smap) -> np.ndarray:
-    """Map data in DN/s (float32). Falls back to raw DN if exposure time is unusable."""
+    """Map data in DN/s (float32). Frames with unusable exposure become all-NaN.
+
+    EXPTIME = 0 happens in bulk during SDO eclipse seasons (Earth partially
+    occults the detector); such frames are also photometrically invalid, so
+    masking them (NaN -> QA high_nan flag, hourly resampling skips them) is
+    correct. Returning raw DN here would silently mix units (~3x scale).
+    """
     data = np.asarray(smap.data, dtype=np.float32)
     exptime = smap.exposure_time
-    if exptime is None:
-        log.warning("no exposure time for %s; keeping raw DN", smap.name)
-        return data
-    seconds = float(exptime.to_value("s"))
+    seconds = float(exptime.to_value("s")) if exptime is not None else np.nan
     if not np.isfinite(seconds) or seconds <= 0:
-        log.warning("invalid exposure time %r for %s; keeping raw DN", seconds, smap.name)
-        return data
+        log.warning("invalid exposure time %r for %s; masking frame as NaN",
+                    seconds, smap.name)
+        return np.full(data.shape, np.nan, dtype=np.float32)
     return data / np.float32(seconds)
 
 

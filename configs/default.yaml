@@ -72,8 +72,8 @@ data:
   aia_euv_series: aia.lev1_euv_12s
   aia_uv_series: aia.lev1_uv_24s           # 1600/1700 A
   hmi_cadence_seconds: 720
-  aia_cadence_seconds: 720                 # reduced AIA cadence (12 min)
-  aia_match_tolerance_seconds: 360         # max |AIA - HMI| timestamp gap when stacking
+  aia_cadence_seconds: 3600                # hourly: features are hourly anyway (bulk-run lever)
+  aia_match_tolerance_seconds: 1800        # max |AIA - HMI| timestamp gap when stacking
   cutout_pad_arcsec: 40                    # padding around the HARP box for AIA cutouts
   sample_cadence_minutes: 60               # per-AR feature time-series cadence (Phase C)
 

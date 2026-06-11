@@ -48,7 +48,9 @@ class TestExposureNormalize:
         assert out.dtype == np.float32
         assert np.allclose(out, 3.0)
 
-    def test_invalid_exptime_keeps_raw(self, make_hpc_map, make_cea_map):
+    def test_invalid_exptime_masks_frame(self, make_hpc_map, make_cea_map):
+        """EXPTIME=0 (eclipse-season frames) must yield NaN, never raw DN
+        (raw DN would silently mix units with DN/s in the same stack)."""
         import astropy.units as u
         from sunpy.coordinates import Helioprojective
 
@@ -57,7 +59,9 @@ class TestExposureNormalize:
             Helioprojective(observer=cea.observer_coordinate, obstime=cea.date))
         m = make_hpc_map(center, data=np.full((80, 80), 6.0, dtype=np.float32),
                          exptime_s=0.0)
-        assert np.allclose(exposure_normalize(m), 6.0)
+        out = exposure_normalize(m)
+        assert np.isnan(out).all()
+        assert out.dtype == np.float32
 
 
 class TestFrameQA:

@@ -112,6 +112,41 @@ def cutout_corners_from_map(hmi_map, pad_arcsec: float = 40.0):
     return bottom_left, top_right
 
 
+def build_aia_uv_ds(series: str, channel: int, start: datetime, end: datetime,
+                    cadence_seconds: int) -> str:
+    """UV record set with WAVELNTH as a prime-key slice, e.g.
+    aia.lev1_uv_24s[2012.03.04_00:00:00_TAI-2012.03.10_00:00:00_TAI@3600s][1700]{image}
+
+    Needed because lev1_uv_24s interleaves 1600/1700 every 24 s: Fido's
+    Sample+Wavelength filters the sampled T_REC slots and can return ZERO
+    records when the cadence is a multiple of 48 s (phase-locked to the other
+    wavelength). The native [time@step][wavelength] syntax samples WITHIN the
+    wavelength slice (verified live 2026-06-12).
+    """
+    return (f"{series}[{tai_str(start)}-{tai_str(end)}@{cadence_seconds}s]"
+            f"[{channel}]{{image}}")
+
+
+def _fetch_uv_via_drms(
+    series: str, channel: int, start: datetime, end: datetime,
+    cadence_seconds: int, bottom_left, top_right, email: str, out_dir: Path,
+) -> list[Path]:
+    """UV cutouts via a drms export with the im_patch payload sunpy would build."""
+    import drms
+    from sunpy.net.jsoc import attrs as ja
+
+    cutout = ja.Cutout(bottom_left, top_right=top_right, tracking=True)
+    ds = build_aia_uv_ds(series, channel, start, end, cadence_seconds)
+    log.info("JSOC UV export: %s", ds)
+    request = drms.Client().export(ds, method="url", protocol="fits", email=email,
+                                   process={"im_patch": cutout.value})
+    request.wait()
+    if not request.has_succeeded():
+        raise RuntimeError(f"JSOC UV export failed for {ds!r}")
+    request.download(str(out_dir))
+    return _existing_fits(out_dir)
+
+
 def fetch_aia_cutouts(
     channel: int,
     start: datetime,
@@ -125,7 +160,11 @@ def fetch_aia_cutouts(
     uv_series: str = "aia.lev1_uv_24s",
     overwrite: bool = False,
 ) -> list[Path]:
-    """Request rotation-tracked AIA cutouts from JSOC via Fido. Returns sorted paths."""
+    """Request rotation-tracked AIA cutouts from JSOC. Returns sorted paths.
+
+    EUV goes through Fido; UV (1600/1700) goes through a direct drms export
+    (see build_aia_uv_ds for why).
+    """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     if not overwrite:
@@ -134,11 +173,18 @@ def fetch_aia_cutouts(
             log.info("reusing %d existing AIA %d files in %s", len(existing), channel, out_dir)
             return existing
 
+    series = aia_series_for_channel(channel, euv_series, uv_series)
+    if channel in UV_CHANNELS:
+        paths = _fetch_uv_via_drms(series, channel, start, end, cadence_seconds,
+                                   bottom_left, top_right, email, out_dir)
+        log.info("downloaded %d AIA %d A files to %s", len(paths), channel, out_dir)
+        if not paths:
+            raise RuntimeError(f"AIA {channel} A UV export produced no files")
+        return paths
+
     import astropy.units as u
     from sunpy.net import Fido
     from sunpy.net import attrs as a
-
-    series = aia_series_for_channel(channel, euv_series, uv_series)
     log.info("JSOC AIA cutout request: %s, %d A, %s .. %s @ %ds",
              series, channel, start, end, cadence_seconds)
     query = Fido.search(

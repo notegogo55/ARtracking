@@ -7,10 +7,22 @@ import pytest
 
 from solarflare.data.jsoc_fetch import (
     aia_series_for_channel,
+    build_aia_uv_ds,
     build_sharp_ds,
     cutout_corners_from_map,
     tai_str,
 )
+
+
+def test_build_aia_uv_ds():
+    """Wavelength must be a prime-key slice AFTER the sampled time range
+    (lev1_uv_24s interleaves 1600/1700; Fido's Sample+Wavelength can return
+    zero records when the cadence is phase-locked to the other channel)."""
+    ds = build_aia_uv_ds("aia.lev1_uv_24s", 1700,
+                         datetime(2012, 3, 4), datetime(2012, 3, 10), 3600)
+    assert ds == ("aia.lev1_uv_24s"
+                  "[2012.03.04_00:00:00_TAI-2012.03.10_00:00:00_TAI@3600s]"
+                  "[1700]{image}")
 
 
 def test_tai_str():

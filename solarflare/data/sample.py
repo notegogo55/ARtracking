@@ -168,38 +168,50 @@ def build_sample(
         import sunpy.map
 
         for ch in channels:
-            files = fetch_aia_cutouts(
-                ch, t0, t1, cfg.data.aia_cadence_seconds, bottom_left, top_right,
-                email=email, out_dir=raw_root / f"aia_{ch:04d}",
-                euv_series=cfg.data.aia_euv_series, uv_series=cfg.data.aia_uv_series,
-                overwrite=overwrite,
-            )
-            file_times = pd.Series([read_date_obs(f) for f in files])
-            matches = match_nearest(
-                times["time_utc"], file_times, cfg.data.aia_match_tolerance_seconds
-            )
             arr = np.full((n_frames, *target_shape), np.nan, dtype=np.float32)
-            for i, j in enumerate(matches):
-                row = {"frame_idx": i, "channel": channel_key(ch),
-                       "time_utc": times["time_utc"].iloc[i]}
-                if j < 0:
-                    qa_rows.append({**row, "dt_seconds": np.nan,
+            try:
+                files = fetch_aia_cutouts(
+                    ch, t0, t1, cfg.data.aia_cadence_seconds, bottom_left, top_right,
+                    email=email, out_dir=raw_root / f"aia_{ch:04d}",
+                    euv_series=cfg.data.aia_euv_series,
+                    uv_series=cfg.data.aia_uv_series,
+                    overwrite=overwrite,
+                )
+                file_times = pd.Series([read_date_obs(f) for f in files])
+                matches = match_nearest(
+                    times["time_utc"], file_times, cfg.data.aia_match_tolerance_seconds
+                )
+                for i, j in enumerate(matches):
+                    row = {"frame_idx": i, "channel": channel_key(ch),
+                           "time_utc": times["time_utc"].iloc[i]}
+                    if j < 0:
+                        qa_rows.append({**row, "dt_seconds": np.nan,
+                                        **frame_qa(arr[i], None, cfg.qa.max_nan_fraction),
+                                        "flagged": True})
+                        continue
+                    aia_map = sunpy.map.Map(str(files[j]))
+                    normalized = exposure_normalize(aia_map)
+                    normalized_map = sunpy.map.Map(normalized, aia_map.meta)
+                    data, coverage = reproject_to_target(normalized_map, hmi_maps[i])
+                    arr[i] = data[: target_shape[0], : target_shape[1]]
+                    dt = abs((file_times.iloc[j]
+                              - times["time_utc"].iloc[i]).total_seconds())
+                    qa_rows.append({**row, "dt_seconds": dt,
+                                    **frame_qa(arr[i], aia_map.meta.get("quality", 0),
+                                               cfg.qa.max_nan_fraction, coverage,
+                                               cfg.qa.min_coverage)})
+                log.info("AIA %d A: stacked %d/%d frames matched", ch,
+                         int((matches >= 0).sum()), n_frames)
+            except Exception as err:  # noqa: BLE001 - one channel must not kill a
+                # multi-hour fetch; store an all-NaN, fully flagged channel instead
+                log.error("AIA %d A failed (%s); storing all-NaN channel", ch, err)
+                for i in range(n_frames):
+                    qa_rows.append({"frame_idx": i, "channel": channel_key(ch),
+                                    "time_utc": times["time_utc"].iloc[i],
+                                    "dt_seconds": np.nan,
                                     **frame_qa(arr[i], None, cfg.qa.max_nan_fraction),
                                     "flagged": True})
-                    continue
-                aia_map = sunpy.map.Map(str(files[j]))
-                normalized = exposure_normalize(aia_map)
-                normalized_map = sunpy.map.Map(normalized, aia_map.meta)
-                data, coverage = reproject_to_target(normalized_map, hmi_maps[i])
-                arr[i] = data[: target_shape[0], : target_shape[1]]
-                dt = abs((file_times.iloc[j] - times["time_utc"].iloc[i]).total_seconds())
-                qa_rows.append({**row, "dt_seconds": dt,
-                                **frame_qa(arr[i], aia_map.meta.get("quality", 0),
-                                           cfg.qa.max_nan_fraction, coverage,
-                                           cfg.qa.min_coverage)})
             stacks[channel_key(ch)] = arr
-            log.info("AIA %d A: stacked %d/%d frames matched", ch,
-                     int((matches >= 0).sum()), n_frames)
 
     # --- GOES labels for this AR (catalog floor C1.0; >=M labeling in Phase D) ---
     events = fetch_goes_events(
