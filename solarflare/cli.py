@@ -852,6 +852,34 @@ def ablate(
     typer.echo(f"outputs: {out_dir}")
 
 
+@app.command("render-video")
+def render_video(
+    sample_dir: Annotated[Path, typer.Option("--sample-dir", exists=True, file_okay=False)],
+    config: ConfigOpt = DEFAULT_CONFIG,
+    channel: Annotated[int, typer.Option(help="AIA channel for the third panel")] = 171,
+    start: Annotated[datetime | None, typer.Option(help="Clip start (UTC)")] = None,
+    end: Annotated[datetime | None, typer.Option(help="Clip end (UTC)")] = None,
+    fps: Annotated[int, typer.Option()] = 12,
+    out: Annotated[Path | None, typer.Option(help="Output .mp4")] = None,
+) -> None:
+    """MP4 of a cached sample: continuum | B_los | AIA with AR-mask contours."""
+    import numpy as np
+
+    from solarflare.data.cache import load_sample
+    from solarflare.viz.video import render_sample_video
+
+    _load(config)
+    sample = load_sample(sample_dir)
+    masks_path = sample_dir / "ar_masks.npy"
+    if not masks_path.exists():
+        typer.secho("no ar_masks.npy - run `solarflare segment-sample` first", fg="red")
+        raise typer.Exit(code=1)
+    out = out or sample_dir / f"video_{channel:04d}.mp4"
+    path = render_sample_video(sample, np.load(masks_path), out, channel=channel,
+                               start=start, end=end, fps=fps)
+    typer.echo(f"video: {path}")
+
+
 @app.command("qa-overlay")
 def qa_overlay(
     sample_dir: Annotated[Path, typer.Option("--sample-dir", exists=True, file_okay=False)],
