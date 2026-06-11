@@ -5,6 +5,13 @@ Offline, reproducible pipeline over SDO data: detect & segment active regions on
 images → extract per-AR time series → forecast the probability of a **≥M-class**
 flare (DeepFlareNet-style), evaluated with **TSS** on time-blocked splits.
 
+**Docs**: [architecture](docs/architecture.md) ·
+[reproducibility guide](docs/reproducibility.md) (env, seeds, exact commands,
+data access, per-gate runtimes) · [module reference](docs/modules.md) ·
+[final report](reports/final_report.md) ·
+[Phase 5 evaluation report](reports/report_phase5.md). CI runs the offline
+fixture-based suite on Linux + Windows (`.github/workflows/ci.yml`).
+
 ## Layout
 
 ```
