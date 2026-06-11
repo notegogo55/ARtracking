@@ -192,6 +192,28 @@ Run on our own MVP sequences via the same CLI (`forecast-benchmark --dataset
 data/datasets/seq_v1 --embargo-hours 2`); with n=14 those numbers are
 integration proof, not evidence.
 
+## Phase 5: integration, evaluation & ablation (Gate G5 closed 2026-06-11)
+
+- **One command end-to-end**: `solarflare run-all -w ar11158_feb2011` chains
+  A→E with per-stage caching (raw FITS / sample / masks / features reused;
+  dataset + evaluation rebuilt deterministically) and writes a `manifest.json`.
+  Two consecutive runs compare **equal** on the reproducibility keys.
+- **Held-out evaluation** (`solarflare forecast-holdout`): train SWAN-SF P3,
+  threshold frozen on its chronological tail, single evaluation on P4:
+  **LSTM TSS 0.873** (AUC 0.979) > ensemble 0.872 > Holt-Winters 0.783 >
+  climatology 0. In the band of DeepFlareNet's reported TSS ≈ 0.80 for ≥M —
+  not directly comparable (different sample frame/period); see
+  [reports/report_phase5.md](reports/report_phase5.md) for the honest framing.
+- **Ablation** (`solarflare ablate`): grouped permutation importance (gradients
+  bundled with their base feature) + optional drop-one retrains. On SWAN-SF
+  (P3-trained, P4-evaluated) the ranking is physically sensible — magnetic
+  shear & current-helicity parameters lead (MEANGAM, TOTUSJH, SHRGT45) — with
+  the correlated-features caveat documented. The same harness on the n=14
+  MVP dataset runs but yields no signal (reported as anecdotal, no conclusion).
+- Evaluation report with tables + figures: `reports/report_phase5.md`
+  (regenerate via `uv run python scripts/build_report.py`). Streamlit
+  dashboard: deferred (optional in spec).
+
 ## Conventions
 
 - All times UTC (naive ISO-8601). Single global seed (`project.seed`).
