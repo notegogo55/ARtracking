@@ -81,3 +81,7 @@ recorded values come from Windows 11 / CPU torch / the committed `uv.lock`.
   ns — normalize with `.as_unit("ns")` before integer time math.
 - A pre-existing global ultralytics `runs_dir` can reroot training outputs;
   the wrapper passes absolute paths to prevent this.
+- **Windows Smart App Control / WDAC** may block the generated
+  `solarflare.exe` console-script shim in some locations (observed for clones
+  under `%TEMP%`, os error 4551). Equivalent fallback that is never blocked:
+  `uv run python -m solarflare.cli <command ...>`.
