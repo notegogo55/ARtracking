@@ -104,6 +104,13 @@ class DataConfig(_StrictModel):
         return v
 
 
+class FeaturesConfig(_StrictModel):
+    """Stage C: per-AR feature extraction and sequence assembly."""
+
+    min_valid_fraction: float = Field(default=0.8, gt=0, le=1)
+    dataset_version: str = "v1"
+
+
 class ForecastConfig(_StrictModel):
     lookback_hours: float = Field(default=24, gt=0)
     lead_hours: float = Field(default=24, gt=0)
@@ -190,6 +197,7 @@ class Config(_StrictModel):
     detect: DetectConfig = DetectConfig()
     segment: SegmentConfig = SegmentConfig()
     track: TrackConfig = TrackConfig()
+    features: FeaturesConfig = FeaturesConfig()
     forecast: ForecastConfig = ForecastConfig()
     geometry: GeometryConfig = GeometryConfig()
     split: SplitConfig = SplitConfig()

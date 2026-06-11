@@ -19,6 +19,7 @@ dependencies = [
     "reproject>=0.13",
     "scikit-image>=0.23",
     "ultralytics>=8.3",
+    "pyarrow>=16",
 ]
 
 [dependency-groups]

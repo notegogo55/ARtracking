@@ -436,6 +436,124 @@ def eval_detect(
     )
 
 
+@app.command("build-features")
+def build_features(
+    sample_dir: Annotated[Path, typer.Option("--sample-dir", exists=True, file_okay=False)],
+    config: ConfigOpt = DEFAULT_CONFIG,
+) -> None:
+    """Extract per-frame AR features for a cached sample (requires ar_masks.npy)."""
+    import numpy as np
+
+    from solarflare.data.cache import load_sample
+    from solarflare.features.extract import extract_sample_features
+
+    _load(config)  # logging + seed; extraction itself is config-free
+    sample = load_sample(sample_dir)
+    masks_path = sample_dir / "ar_masks.npy"
+    if not masks_path.exists():
+        typer.secho(f"no ar_masks.npy in {sample_dir} - run `solarflare segment-sample` first",
+                    fg="red")
+        raise typer.Exit(code=1)
+    frame_df = extract_sample_features(sample, np.load(masks_path))
+    out = sample_dir / "features_frame.csv"
+    frame_df.to_csv(out, index=False)
+    typer.echo(f"features: {out}  ({len(frame_df)} rows x {frame_df.shape[1] - 1} features)")
+
+
+@app.command("build-dataset")
+def build_dataset(
+    config: ConfigOpt = DEFAULT_CONFIG,
+    out: Annotated[
+        Path | None, typer.Option(help="Output dir (default: data/datasets/seq_<ver>)")
+    ] = None,
+) -> None:
+    """Gate G3: assemble the labeled, leakage-safe per-AR sequence dataset."""
+    import numpy as np
+    import pandas as pd
+
+    from solarflare.data.cache import load_sample
+    from solarflare.detect.bootstrap import fetch_harp_boxes
+    from solarflare.features.dataset import build_sequences, write_dataset
+    from solarflare.features.extract import build_frame_pipeline, extract_sample_features
+
+    cfg = _load(config)
+    samples_root = Path(cfg.paths.cache_dir) / "samples"
+    sample_dirs = sorted(p for p in samples_root.glob("*") if (p / "meta.json").exists())
+    if not sample_dirs:
+        typer.secho(f"no cached samples under {samples_root}", fg="red")
+        raise typer.Exit(code=1)
+
+    lookback_steps = int(cfg.forecast.lookback_hours * 60 / cfg.data.sample_cadence_minutes)
+    windows = {w.name: w for w in cfg.study.windows}
+    all_X, all_rows, feature_names = [], [], None
+    for sdir in sample_dirs:
+        sample = load_sample(sdir)
+        masks_path = sdir / "ar_masks.npy"
+        if not masks_path.exists():
+            typer.secho(f"[skip] {sdir.name}: no ar_masks.npy (run segment-sample)", fg="yellow")
+            continue
+        frame_csv = sdir / "features_frame.csv"
+        if frame_csv.exists():
+            frame_df = pd.read_csv(frame_csv, parse_dates=["time"])
+        else:
+            frame_df = extract_sample_features(sample, np.load(masks_path))
+            frame_df.to_csv(frame_csv, index=False)
+        features = build_frame_pipeline(frame_df, cfg.data.sample_cadence_minutes)
+
+        meta = sample.meta
+        window = windows.get(meta.get("window"))
+        lon_series = None
+        if window is not None:
+            boxes = fetch_harp_boxes(window.start, window.end,
+                                     cfg.detect.bootstrap_cadence_hours, cfg.paths.cache_dir)
+            mine = boxes[boxes["harpnum"] == int(meta["harp"])]
+            if len(mine):
+                lon_series = mine.set_index("time")["lon_fwt"].dropna()
+        X, rows, feature_names = build_sequences(
+            features, sample.labels, noaa=int(meta["noaa"]), harp=int(meta["harp"]),
+            window_name=str(meta.get("window")), lookback_steps=lookback_steps,
+            lead_hours=cfg.forecast.lead_hours,
+            min_class=cfg.forecast.flare_class_threshold,
+            lon_series=lon_series, max_lon_deg=cfg.geometry.max_cm_longitude_deg,
+            min_valid_fraction=cfg.features.min_valid_fraction,
+        )
+        typer.echo(f"{sdir.name}: {len(rows)} sequences "
+                   f"({int(rows['label'].sum()) if len(rows) else 0} positive)")
+        if len(rows):
+            all_X.append(X)
+            all_rows.append(rows)
+
+    if not all_rows:
+        typer.secho("no sequences built", fg="red")
+        raise typer.Exit(code=1)
+    X = np.concatenate(all_X)
+    samples_df = pd.concat(all_rows, ignore_index=True)
+    out_dir = out or Path("data/datasets") / f"seq_{cfg.features.dataset_version}"
+    stats = write_dataset(
+        out_dir, X, samples_df, feature_names,
+        {
+            "cadence_minutes": cfg.data.sample_cadence_minutes,
+            "lookback_steps": lookback_steps,
+            "lead_hours": cfg.forecast.lead_hours,
+            "flare_class_threshold": cfg.forecast.flare_class_threshold,
+            "max_cm_longitude_deg": cfg.geometry.max_cm_longitude_deg,
+            "min_valid_fraction": cfg.features.min_valid_fraction,
+            "config_hash": cfg.short_hash(),
+        },
+    )
+    typer.echo(f"dataset: {out_dir}")
+    typer.echo(f"class balance: {stats['n_positive']} pos / {stats['n_negative']} neg "
+               f"(rate {stats['positive_rate']:.3f}); "
+               f"missing cells: {stats['missing_fraction_overall']:.4f}")
+    append_experiment_row(
+        cfg.paths.experiment_log,
+        {"phase": "P3", "experiment": "build_dataset", "config_hash": cfg.short_hash(),
+         "n_sequences": stats["n_sequences"], "n_positive": stats["n_positive"],
+         "positive_rate": stats["positive_rate"],
+         "missing_fraction": stats["missing_fraction_overall"]},
+    )
+
+
 @app.command("qa-overlay")
 def qa_overlay(
     sample_dir: Annotated[Path, typer.Option("--sample-dir", exists=True, file_okay=False)],

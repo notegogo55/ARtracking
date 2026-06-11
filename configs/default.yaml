@@ -107,6 +107,10 @@ track:
   iou_threshold: 0.2              # min rotation-compensated IoU to link boxes
   max_gap_frames: 2               # tolerate this many missed frames before retiring
 
+features:
+  min_valid_fraction: 0.8   # min fraction of finite cells in a sequence window
+  dataset_version: v1
+
 forecast:
   lookback_hours: 24           # feature history fed to the model
   lead_hours: 24               # forecast horizon; features end strictly before this window

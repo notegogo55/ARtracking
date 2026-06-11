@@ -140,6 +140,29 @@ hash, metrics).
   add windows to improve). Cropping AIA remains HARP-first; the detector is
   the no-SHARP generalization path.
 
+## Phase 3: features & labeled sequences
+
+`solarflare build-features` + `solarflare build-dataset` produce
+`data/datasets/seq_v1/`: `X.npz` (n, 24 steps @ 1 h, 24 features),
+`samples.parquet`, `data_dictionary.json`, `stats.json`.
+
+- Features per step: **max-in-mask** AIA intensity per channel (8; never the
+  mean), unsigned/signed flux (G·px), peak |B| (G), area (px), + backward
+  1-step gradients of each. Native pixel units (CEA grid is equal-area; the
+  physical conversion is one constant, documented in the dictionary).
+- Leakage guards: right-edge-labeled hourly resampling (row t holds only
+  (t−1h, t]); backward-only gradients; features ≤ t0; label = ≥M flare of the
+  AR peaking strictly in (t0, t0+24h]. Enforced by a poison-the-future test
+  (corrupt all post-t0 frames → sequences bit-identical).
+- Gates: |Stonyhurst lon| ≤ 65° at t0 (HARP LON_FWT, interpolated);
+  ≥80 % finite cells per window.
+
+**Gate G3 closed 2026-06-11** on the MVP sample: 14 sequences, 3 pos / 11 neg
+(rate 0.214), missing cells 0.19 % (sparse AIA 1700). Labels verified against
+the GOES record (positives exactly the three issuances preceding the X2.2).
+Single-AR for now — the builder is multi-AR; balance matures as Phase 1
+fetches more windows.
+
 ## Conventions
 
 - All times UTC (naive ISO-8601). Single global seed (`project.seed`).
