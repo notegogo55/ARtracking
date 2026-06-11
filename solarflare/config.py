@@ -79,9 +79,16 @@ class StudyConfig(_StrictModel):
 
 class DataConfig(_StrictModel):
     aia_channels: list[int] = Field(
-        default_factory=lambda: [94, 131, 171, 193, 211, 304, 335, 1600]
+        default_factory=lambda: [94, 131, 171, 193, 211, 304, 1600, 1700]
     )
     hmi_sharp_series: str = "hmi.sharp_cea_720s"
+    hmi_segments: list[str] = Field(default_factory=lambda: ["magnetogram", "continuum"])
+    aia_euv_series: str = "aia.lev1_euv_12s"
+    aia_uv_series: str = "aia.lev1_uv_24s"
+    hmi_cadence_seconds: int = Field(default=720, gt=0)
+    aia_cadence_seconds: int = Field(default=720, gt=0)
+    aia_match_tolerance_seconds: int = Field(default=360, gt=0)
+    cutout_pad_arcsec: float = Field(default=40.0, ge=0)
     sample_cadence_minutes: int = Field(default=60, gt=0)
 
     @field_validator("aia_channels")
@@ -112,6 +119,13 @@ class ForecastConfig(_StrictModel):
         return v
 
 
+class QAConfig(_StrictModel):
+    """Bad-frame flagging thresholds. Frames are flagged, never silently dropped."""
+
+    max_nan_fraction: float = Field(default=0.5, ge=0, le=1)
+    min_coverage: float = Field(default=0.6, ge=0, le=1)
+
+
 class GeometryConfig(_StrictModel):
     max_cm_longitude_deg: float = Field(default=65, ge=0, le=90)
 
@@ -138,6 +152,7 @@ class Config(_StrictModel):
     paths: PathsConfig = PathsConfig()
     study: StudyConfig
     data: DataConfig = DataConfig()
+    qa: QAConfig = QAConfig()
     forecast: ForecastConfig = ForecastConfig()
     geometry: GeometryConfig = GeometryConfig()
     split: SplitConfig = SplitConfig()

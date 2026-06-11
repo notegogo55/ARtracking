@@ -13,8 +13,10 @@ dependencies = [
     "pyyaml>=6.0",
     "pydantic>=2.7",
     "typer>=0.12",
-    "sunpy[net]>=6.0",
+    "sunpy[net,map]>=6.0",
     "drms>=0.8",
+    "aiapy>=0.8",
+    "reproject>=0.13",
 ]
 
 [dependency-groups]

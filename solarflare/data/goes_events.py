@@ -55,6 +55,24 @@ def load_events_csv(path: str | Path) -> pd.DataFrame:
     return df
 
 
+def select_ar_events(
+    events: pd.DataFrame,
+    noaa: int,
+    start,
+    end,
+) -> pd.DataFrame:
+    """Events attributed to one NOAA AR with peak inside [start, end), sorted by peak."""
+    if events.empty:
+        return events
+    peaks = pd.to_datetime(events["peak_time"])
+    mask = (
+        (events["noaa_ar"].astype(int) == int(noaa))
+        & (peaks >= pd.Timestamp(start))
+        & (peaks < pd.Timestamp(end))
+    )
+    return events[mask].sort_values("peak_time").reset_index(drop=True)
+
+
 def fetch_goes_events(
     start: datetime,
     end: datetime,

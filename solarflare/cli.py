@@ -3,7 +3,10 @@
 Commands:
   show-config        Validate and print the resolved config.
   check-credentials  Verify JSOC/drms and SunPy/HEK connectivity with setup hints.
-  base-rate          Compute the climatological >=M base rate (Gate G1 baseline).
+  base-rate          Compute the climatological >=M base rate (baseline).
+  resolve-harps      Cross-check config HARP numbers against the official JSOC mapping.
+  fetch              Fetch + co-align + normalize + cache one AR sample (Gate G1).
+  qa-overlay         Re-render the QA overlay from a cached sample.
 """
 
 from __future__ import annotations
@@ -57,10 +60,24 @@ def check_credentials(config: ConfigOpt = DEFAULT_CONFIG) -> None:
     cfg = _load(config)
     failures: list[str] = []
 
-    # 1. JSOC export email (needed for Phase A cutout exports, warn-only today)
+    # 1. JSOC export email: must be set AND registered for cutout exports
     email = os.environ.get("JSOC_EMAIL", "")
     if email:
-        typer.secho(f"[ok]   JSOC_EMAIL is set ({email})", fg="green")
+        try:
+            import drms
+
+            registered = bool(drms.Client().check_email(email))
+        except Exception as err:  # noqa: BLE001
+            typer.secho(f"[warn] could not verify JSOC email registration: {err}", fg="yellow")
+            registered = True  # connectivity check below will catch real outages
+        if registered:
+            typer.secho(f"[ok]   JSOC_EMAIL is set and registered ({email})", fg="green")
+        else:
+            failures.append(
+                f"JSOC_EMAIL '{email}' is NOT registered with JSOC.\n"
+                f"       Register it at {JSOC_REGISTER_URL} (reply to their "
+                "confirmation email), then re-run this check."
+            )
     else:
         typer.secho(
             "[warn] JSOC_EMAIL not set. Exports in Phase A will fail.\n"
@@ -169,6 +186,125 @@ def base_rate(
                 "tss": 0.0,
             },
         )
+
+
+@app.command("resolve-harps")
+def resolve_harps(
+    config: ConfigOpt = DEFAULT_CONFIG,
+    mapping_file: Annotated[
+        Path | None,
+        typer.Option(help="Offline mode: parse a local copy of the JSOC mapping file"),
+    ] = None,
+    strict: Annotated[
+        bool, typer.Option("--strict", help="Exit non-zero on any mismatch/unresolved AR")
+    ] = False,
+) -> None:
+    """Resolve/verify HARP numbers for every configured NOAA AR via the JSOC mapping."""
+    from solarflare.data.harps import (
+        fetch_harp_noaa_mapping,
+        harps_for_noaa,
+        parse_harp_noaa_mapping,
+    )
+
+    cfg = _load(config)
+    if mapping_file is not None:
+        mapping = parse_harp_noaa_mapping(mapping_file.read_text(encoding="utf-8"))
+    else:
+        mapping = fetch_harp_noaa_mapping(cfg.paths.cache_dir)
+
+    problems = 0
+    for window in cfg.study.windows:
+        for target in window.targets:
+            hits = harps_for_noaa(mapping, target.noaa)
+            resolved = hits[0] if len(hits) == 1 else None
+            if resolved is None:
+                typer.secho(
+                    f"[??]   {window.name}: NOAA {target.noaa} -> ambiguous/missing: {hits}",
+                    fg="red",
+                )
+                problems += 1
+            elif target.harp is None:
+                typer.secho(
+                    f"[new]  {window.name}: NOAA {target.noaa} -> HARP {resolved} "
+                    f"(set `harp: {resolved}` in the config)",
+                    fg="yellow",
+                )
+            elif target.harp != resolved:
+                typer.secho(
+                    f"[BAD]  {window.name}: NOAA {target.noaa} config says HARP "
+                    f"{target.harp} but JSOC mapping says {resolved}",
+                    fg="red",
+                )
+                problems += 1
+            else:
+                typer.secho(
+                    f"[ok]   {window.name}: NOAA {target.noaa} -> HARP {resolved}", fg="green"
+                )
+    if strict and problems:
+        raise typer.Exit(code=1)
+
+
+@app.command("fetch")
+def fetch(
+    window: Annotated[str, typer.Option("--window", "-w", help="Study window name")],
+    config: ConfigOpt = DEFAULT_CONFIG,
+    noaa: Annotated[int | None, typer.Option(help="Target NOAA AR (default: first)")] = None,
+    start: Annotated[datetime | None, typer.Option(help="Override window start (UTC)")] = None,
+    end: Annotated[datetime | None, typer.Option(help="Override window end (UTC)")] = None,
+    channel: Annotated[
+        list[int] | None, typer.Option("--channel", help="AIA channel(s); default: config list")
+    ] = None,
+    skip_aia: Annotated[bool, typer.Option("--skip-aia", help="HMI + labels only")] = False,
+    overwrite: Annotated[bool, typer.Option("--overwrite", help="Re-download raw FITS")] = False,
+    email: Annotated[str, typer.Option(help="JSOC notify email (default: $JSOC_EMAIL)")] = "",
+    overlay_channel: Annotated[int, typer.Option(help="Channel for the QA overlay")] = 171,
+) -> None:
+    """Gate G1: fetch, co-align, normalize and cache one AR sample + QA overlay."""
+    from solarflare.data.cache import load_sample
+    from solarflare.data.sample import build_sample
+    from solarflare.viz.overlay import build_overlay
+
+    cfg = _load(config)
+    email = email or os.environ.get("JSOC_EMAIL", "")
+    if not email:
+        typer.secho(
+            "No JSOC email. Register at "
+            f"{JSOC_REGISTER_URL}\nthen:  $env:JSOC_EMAIL = \"you@example.com\"",
+            fg="red",
+        )
+        raise typer.Exit(code=1)
+
+    sample_dir = build_sample(
+        cfg, window, noaa=noaa, start=start, end=end, channels=channel,
+        email=email, skip_aia=skip_aia, overwrite=overwrite,
+    )
+    sample = load_sample(sample_dir)
+    typer.echo(f"cached:  {sample_dir}")
+    typer.echo(f"frames:  {sample.n_frames}   arrays: {sorted(sample.arrays)}")
+    if not sample.qa.empty and "flagged" in sample.qa:
+        flagged = sample.qa[sample.qa["flagged"].astype(bool)]
+        typer.echo(f"QA:      {len(flagged)}/{len(sample.qa)} frame-channel entries flagged")
+    typer.echo(f"labels:  {len(sample.labels)} GOES events for NOAA {sample.meta.get('noaa')}")
+    if not skip_aia:
+        overlay = build_overlay(sample, channel=overlay_channel)
+        typer.echo(f"overlay: {overlay}")
+
+
+@app.command("qa-overlay")
+def qa_overlay(
+    sample_dir: Annotated[Path, typer.Option("--sample-dir", exists=True, file_okay=False)],
+    channel: Annotated[int, typer.Option(help="AIA channel to show")] = 171,
+    frame: Annotated[int | None, typer.Option(help="Frame index (default: flare peak)")] = None,
+    out: Annotated[Path | None, typer.Option(help="Output PNG path")] = None,
+) -> None:
+    """Re-render the QA overlay from a cached sample directory."""
+    from solarflare.data.cache import load_sample
+    from solarflare.viz.overlay import build_overlay
+
+    setup_logging()
+    sample = load_sample(sample_dir)
+    path = build_overlay(sample, channel=channel, frame_idx=frame, out_path=out)
+    typer.echo(f"overlay: {path}")
 
 
 if __name__ == "__main__":

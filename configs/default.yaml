@@ -15,8 +15,8 @@ study:
   # Walking-skeleton target: one well-instrumented AR with a clean X-class event.
   mvp_window: ar11158_feb2011
   # Initial study scope: well-documented Cycle 24/25 ARs + one quiet-Sun window.
-  # `harp` = JSOC HARPNUM for hmi.sharp_cea_720s cutouts. Values marked "verify"
-  # must be confirmed against the official JSOC mapping before Phase A downloads:
+  # `harp` = JSOC HARPNUM for hmi.sharp_cea_720s cutouts. All values verified
+  # 2026-06-11 against the official JSOC mapping (`solarflare resolve-harps`):
   #   http://jsoc.stanford.edu/doc/data/hmi/harpnum_to_noaa/all_harps_with_noaa_ars.txt
   windows:
     - name: ar11158_feb2011
@@ -25,7 +25,7 @@ study:
       kind: active
       targets:
         - noaa: 11158
-          harp: 377            # canonical SHARP example region; verify anyway
+          harp: 377
           notes: "First X-class flare of Cycle 24 (X2.2 on 2011-02-15); standard SHARP benchmark AR."
     - name: ar11429_mar2012
       start: 2012-03-04T00:00:00
@@ -33,7 +33,7 @@ study:
       kind: active
       targets:
         - noaa: 11429
-          harp: null           # resolve via JSOC mapping in Phase A
+          harp: 1449
           notes: "Major March 2012 storms; X5.4 on 2012-03-07."
     - name: ar12192_oct2014
       start: 2014-10-18T00:00:00
@@ -41,7 +41,7 @@ study:
       kind: active
       targets:
         - noaa: 12192
-          harp: 4698           # verify against JSOC mapping
+          harp: 4698
           notes: "Largest AR of Cycle 24; many X flares (e.g. X3.1 on 2014-10-24), notably CME-poor."
     - name: ar12673_sep2017
       start: 2017-09-03T00:00:00
@@ -49,7 +49,7 @@ study:
       kind: active
       targets:
         - noaa: 12673
-          harp: 7115           # verify against JSOC mapping
+          harp: 7115
           notes: "X9.3 on 2017-09-06 and X8.2 on 2017-09-10; most intense flares of Cycle 24."
     - name: quiet_dec2019
       start: 2019-12-01T00:00:00
@@ -62,13 +62,24 @@ study:
       kind: active
       targets:
         - noaa: 13664
-          harp: null           # resolve via JSOC mapping in Phase A
+          harp: 11149
           notes: "Cycle 25 'Gannon storm' source region; X-flare series incl. X8.7 on 2024-05-14."
 
 data:
-  aia_channels: [94, 131, 171, 193, 211, 304, 335, 1600]  # Angstrom
+  aia_channels: [94, 131, 171, 193, 211, 304, 1600, 1700]  # Angstrom
   hmi_sharp_series: hmi.sharp_cea_720s
-  sample_cadence_minutes: 60   # per-AR feature time-series cadence
+  hmi_segments: [magnetogram, continuum]   # LOS magnetogram + continuum from the CEA series
+  aia_euv_series: aia.lev1_euv_12s
+  aia_uv_series: aia.lev1_uv_24s           # 1600/1700 A
+  hmi_cadence_seconds: 720
+  aia_cadence_seconds: 720                 # reduced AIA cadence (12 min)
+  aia_match_tolerance_seconds: 360         # max |AIA - HMI| timestamp gap when stacking
+  cutout_pad_arcsec: 40                    # padding around the HARP box for AIA cutouts
+  sample_cadence_minutes: 60               # per-AR feature time-series cadence (Phase C)
+
+qa:
+  max_nan_fraction: 0.5     # flag frames with more missing pixels than this
+  min_coverage: 0.6         # flag reprojected frames covering less of the CEA grid
 
 forecast:
   lookback_hours: 24           # feature history fed to the model

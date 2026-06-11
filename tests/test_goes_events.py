@@ -38,6 +38,18 @@ def test_load_events_csv(sample_events_csv):
     assert str(df["peak_time"].dtype).startswith("datetime64")
 
 
+def test_select_ar_events(sample_events_csv):
+    from solarflare.data.goes_events import select_ar_events
+
+    events = load_events_csv(sample_events_csv)
+    sel = select_ar_events(events, 90001, "2099-01-01", "2099-01-04")
+    assert list(sel["goes_class"]) == ["C5.0", "M1.5", "M2.0"]
+    # window end is exclusive and other ARs are excluded
+    assert select_ar_events(events, 90001, "2099-01-01", "2099-01-03").shape[0] == 1
+    assert select_ar_events(events, 90003, "2099-01-01", "2099-03-01").shape[0] == 1
+    assert select_ar_events(events, 12345, "2099-01-01", "2099-03-01").empty
+
+
 def test_load_events_csv_missing_columns(tmp_path):
     p = tmp_path / "bad.csv"
     p.write_text("peak_time,goes_class\n2099-01-01T00:00:00,M1.0\n")
