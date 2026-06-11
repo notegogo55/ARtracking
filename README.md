@@ -113,6 +113,33 @@ Offline/CI mode: `solarflare base-rate --events-csv tests/fixtures/goes_events_s
 Results are appended to `outputs/experiments.csv` (timestamp, git SHA, config
 hash, metrics).
 
+## Phase 2: detection, segmentation & tracking
+
+- **Bootstrap labels** (`solarflare bootstrap-boxes`): AR boxes from HARP
+  metadata via keyword-only JSOC queries (Stonyhurst LON/LAT_MIN/MAX, semantics
+  verified live) — no hand-labeling, no image downloads.
+- **Segmentation** (`solarflare segment-sample`): threshold + morphology
+  baseline (continuum < 0.85×quiet median OR |B_los| > 100 G) → per-frame AR
+  masks cached next to the sample (`ar_masks.npy`); U-Net is the stretch path.
+- **Tracking** (`solarflare track-window`): temporal IoU with Howard synodic
+  differential-rotation compensation, time-based gap budget, HARP attachment.
+  Oct 2014 multi-AR demo: 39 tracks / 338 boxes, **HARP purity 1.0 (zero ID
+  switches)**, AR 12192 mean compensated IoU 0.946.
+- **Detection** (`build-detect-dataset` / `train-detect` / `eval-detect`):
+  YOLO11n fine-tuned on 143 rebinned 1024² full-disk magnetograms
+  (window-blocked splits, quiet-Sun negatives). Gate G2 numbers (conf 0.25,
+  match IoU 0.5):
+
+  | split (held-out window) | recall | precision | matched IoU (mean/med) |
+  |---|---|---|---|
+  | val — Sep 2017 | 0.88 | 0.92 | 0.83 / 0.86 |
+  | test — May 2024 | 0.61 | 0.45 | 0.80 / 0.82 |
+
+  Box quality is high wherever a match exists; the May-2024 deficit is
+  over-detection on an extreme ~10-AR disk (86 positive training frames —
+  add windows to improve). Cropping AIA remains HARP-first; the detector is
+  the no-SHARP generalization path.
+
 ## Conventions
 
 - All times UTC (naive ISO-8601). Single global seed (`project.seed`).

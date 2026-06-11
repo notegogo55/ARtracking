@@ -36,7 +36,9 @@ def train_detector(
         seed=cfg.project.seed,
         deterministic=True,
         single_cls=True,
-        project=str(out_dir),
+        # absolute path: a relative `project` gets rerooted under the global
+        # ultralytics settings runs_dir, which may live outside this repo
+        project=str(Path(out_dir).resolve()),
         name="ar_yolo",
         exist_ok=True,
         device=device,
@@ -57,9 +59,12 @@ def predict_boxes(
 
     model = YOLO(str(weights))
     rows = []
-    for result in model.predict([str(p) for p in image_paths], conf=conf,
-                                verbose=False, stream=True):
-        image = Path(result.path).name
+    results = model.predict([str(p) for p in image_paths], conf=conf,
+                            verbose=False, stream=True)
+    # result.path is unreliable for list inputs ("image0.jpg"); stream preserves
+    # input order, so key predictions by the paths we passed in.
+    for src, result in zip(image_paths, results, strict=True):
+        image = Path(src).name
         for xyxy, score in zip(result.boxes.xyxy.tolist(),
                                result.boxes.conf.tolist(), strict=True):
             x0, y0, x1, y1 = xyxy
