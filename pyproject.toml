@@ -17,6 +17,8 @@ dependencies = [
     "drms>=0.8",
     "aiapy>=0.8",
     "reproject>=0.13",
+    "scikit-image>=0.23",
+    "ultralytics>=8.3",
 ]
 
 [dependency-groups]

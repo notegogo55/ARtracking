@@ -119,6 +119,40 @@ class ForecastConfig(_StrictModel):
         return v
 
 
+class DetectConfig(_StrictModel):
+    """Stage B detection: HARP-bootstrapped labels + YOLO fine-tuning."""
+
+    bootstrap_cadence_hours: int = Field(default=6, gt=0)
+    fulldisk_series: str = "hmi.m_720s"
+    fulldisk_segment: str = "magnetogram"
+    rebin_scale: float = Field(default=0.25, gt=0, le=1)  # 4096 px -> 1024 px
+    image_clip_gauss: float = Field(default=300.0, gt=0)
+    min_box_arcsec: float = Field(default=20.0, ge=0)
+    yolo_model: str = "yolo11n.pt"
+    yolo_imgsz: int = Field(default=640, gt=0)
+    yolo_epochs: int = Field(default=40, gt=0)
+    # Window-blocked splits (never random): names must reference study windows.
+    train_windows: list[str] = Field(default_factory=list)
+    val_windows: list[str] = Field(default_factory=list)
+    test_windows: list[str] = Field(default_factory=list)
+
+
+class SegmentConfig(_StrictModel):
+    """Stage B segmentation baseline: threshold + morphology (U-Net is a stretch goal)."""
+
+    spot_threshold: float = Field(default=0.85, gt=0, lt=1)  # fraction of quiet-Sun median
+    bfield_threshold_gauss: float = Field(default=100.0, gt=0)
+    min_region_pixels: int = Field(default=64, ge=1)
+    morph_radius_px: int = Field(default=2, ge=1)
+
+
+class TrackConfig(_StrictModel):
+    """Stage B tracking: temporal IoU with differential-rotation compensation."""
+
+    iou_threshold: float = Field(default=0.2, gt=0, lt=1)
+    max_gap_frames: int = Field(default=2, ge=0)
+
+
 class QAConfig(_StrictModel):
     """Bad-frame flagging thresholds. Frames are flagged, never silently dropped."""
 
@@ -153,10 +187,24 @@ class Config(_StrictModel):
     study: StudyConfig
     data: DataConfig = DataConfig()
     qa: QAConfig = QAConfig()
+    detect: DetectConfig = DetectConfig()
+    segment: SegmentConfig = SegmentConfig()
+    track: TrackConfig = TrackConfig()
     forecast: ForecastConfig = ForecastConfig()
     geometry: GeometryConfig = GeometryConfig()
     split: SplitConfig = SplitConfig()
     climatology: ClimatologyConfig
+
+    @model_validator(mode="after")
+    def _detect_splits_valid(self) -> Config:
+        names = {w.name for w in self.study.windows}
+        splits = self.detect.train_windows + self.detect.val_windows + self.detect.test_windows
+        unknown = set(splits) - names
+        if unknown:
+            raise ValueError(f"detect split windows not in study.windows: {sorted(unknown)}")
+        if len(splits) != len(set(splits)):
+            raise ValueError("detect train/val/test windows must be disjoint")
+        return self
 
     def short_hash(self) -> str:
         """Stable 8-char hash of the resolved config, for experiment logging."""

@@ -290,6 +290,152 @@ def fetch(
         typer.echo(f"overlay: {overlay}")
 
 
+@app.command("bootstrap-boxes")
+def bootstrap_boxes(
+    window: Annotated[str, typer.Option("--window", "-w")],
+    config: ConfigOpt = DEFAULT_CONFIG,
+) -> None:
+    """Fetch HARP-derived AR boxes for a window (keyword query only, no images)."""
+    from solarflare.data.sample import resolve_window_target  # noqa: F401  (validates name)
+    from solarflare.detect.bootstrap import fetch_harp_boxes
+
+    cfg = _load(config)
+    win = next((w for w in cfg.study.windows if w.name == window), None)
+    if win is None:
+        typer.secho(f"unknown window {window!r}", fg="red")
+        raise typer.Exit(code=1)
+    boxes = fetch_harp_boxes(win.start, win.end, cfg.detect.bootstrap_cadence_hours,
+                             cfg.paths.cache_dir)
+    typer.echo(f"{len(boxes)} boxes, {boxes['harpnum'].nunique() if len(boxes) else 0} HARPs, "
+               f"{boxes['time'].nunique() if len(boxes) else 0} timesteps")
+
+
+@app.command("segment-sample")
+def segment_sample_cmd(
+    sample_dir: Annotated[Path, typer.Option("--sample-dir", exists=True, file_okay=False)],
+    config: ConfigOpt = DEFAULT_CONFIG,
+    qa_frame: Annotated[int | None, typer.Option(help="Frame for the QA plot")] = None,
+) -> None:
+    """Threshold+morphology AR masks for a cached sample; writes masks + QA plot."""
+    from solarflare.data.cache import load_sample
+    from solarflare.detect.segment import segment_sample, segmentation_qa_plot
+    from solarflare.viz.overlay import pick_overlay_frame
+
+    cfg = _load(config)
+    sample = load_sample(sample_dir)
+    masks_path, areas = segment_sample(sample, cfg.segment)
+    import numpy as np
+
+    frame = qa_frame if qa_frame is not None else pick_overlay_frame(sample)
+    qa_png = segmentation_qa_plot(sample, np.load(masks_path), frame)
+    typer.echo(f"masks:   {masks_path}")
+    typer.echo(f"areas:   median AR {int(areas['ar_pixels'].median())} px, "
+               f"max {int(areas['ar_pixels'].max())} px over {len(areas)} frames")
+    typer.echo(f"qa plot: {qa_png}")
+
+
+@app.command("track-window")
+def track_window(
+    window: Annotated[str, typer.Option("--window", "-w")],
+    config: ConfigOpt = DEFAULT_CONFIG,
+    boxes_csv: Annotated[
+        Path | None, typer.Option(help="Track these boxes instead of HARP bootstrap ones"),
+    ] = None,
+) -> None:
+    """Run the temporal-IoU tracker over a window's boxes; writes the track table."""
+    import pandas as pd
+
+    from solarflare.detect.bootstrap import fetch_harp_boxes
+    from solarflare.track.iou import track_boxes, track_report
+
+    cfg = _load(config)
+    win = next((w for w in cfg.study.windows if w.name == window), None)
+    if win is None:
+        typer.secho(f"unknown window {window!r}", fg="red")
+        raise typer.Exit(code=1)
+    if boxes_csv is not None:
+        boxes = pd.read_csv(boxes_csv, parse_dates=["time"])
+    else:
+        boxes = fetch_harp_boxes(win.start, win.end, cfg.detect.bootstrap_cadence_hours,
+                                 cfg.paths.cache_dir)
+    tracked = track_boxes(boxes, cfg.track.iou_threshold, cfg.track.max_gap_frames)
+    report = track_report(tracked)
+    out_dir = Path(cfg.paths.outputs_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    tracks_path = out_dir / f"tracks_{window}.csv"
+    tracked.to_csv(tracks_path, index=False)
+    typer.echo(report.to_string(index=False))
+    typer.echo(f"tracks:  {tracks_path}  ({tracked['track_id'].nunique()} tracks, "
+               f"{len(tracked)} observations)")
+
+
+@app.command("build-detect-dataset")
+def build_detect_dataset(
+    config: ConfigOpt = DEFAULT_CONFIG,
+    email: Annotated[str, typer.Option(help="JSOC notify email (default: $JSOC_EMAIL)")] = "",
+    out: Annotated[Path, typer.Option(help="Dataset root")] = Path("data/detect_dataset"),
+) -> None:
+    """Download bounded full-disk frames + write the YOLO dataset (window-blocked splits)."""
+    from solarflare.detect.dataset import build_yolo_dataset
+
+    cfg = _load(config)
+    email = email or os.environ.get("JSOC_EMAIL", "")
+    if not email:
+        typer.secho("JSOC email required (set JSOC_EMAIL or --email)", fg="red")
+        raise typer.Exit(code=1)
+    summary = build_yolo_dataset(cfg, email, out)
+    typer.echo(summary.to_string(index=False))
+    typer.echo(f"dataset: {out / 'dataset.yaml'}")
+
+
+@app.command("train-detect")
+def train_detect(
+    config: ConfigOpt = DEFAULT_CONFIG,
+    dataset: Annotated[Path, typer.Option(help="dataset.yaml path")] = Path(
+        "data/detect_dataset/dataset.yaml"),
+    epochs: Annotated[int | None, typer.Option(help="Override config epochs")] = None,
+    device: Annotated[str | None, typer.Option(help="cpu / 0 / mps (default: auto)")] = None,
+) -> None:
+    """Fine-tune pretrained YOLO on the bootstrapped dataset."""
+    from solarflare.detect.yolo import train_detector
+
+    cfg = _load(config)
+    weights = train_detector(cfg, dataset, Path(cfg.paths.outputs_dir) / "detect",
+                             epochs=epochs, device=device)
+    typer.echo(f"weights: {weights}")
+
+
+@app.command("eval-detect")
+def eval_detect(
+    weights: Annotated[Path, typer.Option(exists=True)],
+    config: ConfigOpt = DEFAULT_CONFIG,
+    dataset_root: Annotated[Path, typer.Option()] = Path("data/detect_dataset"),
+    split: Annotated[str, typer.Option(help="val | test")] = "test",
+    conf: Annotated[float, typer.Option()] = 0.25,
+    iou_match: Annotated[float, typer.Option(help="IoU threshold for a match")] = 0.5,
+) -> None:
+    """Gate G2 report: detector IoU/recall/precision vs SHARP-derived boxes."""
+    from solarflare.detect.dataset import load_yolo_labels
+    from solarflare.detect.yolo import evaluate_vs_truth, predict_boxes
+
+    cfg = _load(config)
+    images = sorted((dataset_root / "images" / split).glob("*.png"))
+    if not images:
+        typer.secho(f"no images under {dataset_root}/images/{split}", fg="red")
+        raise typer.Exit(code=1)
+    truth = load_yolo_labels(dataset_root, split)
+    preds = predict_boxes(weights, images, conf=conf)
+    metrics = evaluate_vs_truth(preds, truth, iou_match=iou_match)
+    for key, value in metrics.items():
+        typer.echo(f"{key:>22}: {value:.4f}" if isinstance(value, float)
+                   else f"{key:>22}: {value}")
+    append_experiment_row(
+        cfg.paths.experiment_log,
+        {"phase": "P2", "experiment": f"detect_eval_{split}", "weights": str(weights),
+         "config_hash": cfg.short_hash(), **metrics},
+    )
+
+
 @app.command("qa-overlay")
 def qa_overlay(
     sample_dir: Annotated[Path, typer.Option("--sample-dir", exists=True, file_okay=False)],

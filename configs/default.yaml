@@ -81,6 +81,32 @@ qa:
   max_nan_fraction: 0.5     # flag frames with more missing pixels than this
   min_coverage: 0.6         # flag reprojected frames covering less of the CEA grid
 
+detect:
+  bootstrap_cadence_hours: 6      # label rows + full-disk frame cadence
+  fulldisk_series: hmi.m_720s
+  fulldisk_segment: magnetogram
+  rebin_scale: 0.25               # JSOC-side rebin: 4096 -> 1024 px (verified live)
+  image_clip_gauss: 300           # +/- clip for 8-bit PNG conversion
+  min_box_arcsec: 20              # drop degenerate HARP boxes
+  yolo_model: yolo11n.pt          # pretrained nano model (transfer learning)
+  yolo_imgsz: 640
+  yolo_epochs: 40
+  # Window-blocked splits: train on Cycle-24 windows + quiet negatives,
+  # validate on Sep 2017, hold out Cycle-25 May 2024 for the gate report.
+  train_windows: [ar11158_feb2011, ar11429_mar2012, ar12192_oct2014, quiet_dec2019]
+  val_windows: [ar12673_sep2017]
+  test_windows: [ar13664_may2024]
+
+segment:
+  spot_threshold: 0.85            # continuum < 0.85 x quiet-Sun median => sunspot
+  bfield_threshold_gauss: 100     # |B_los| > 100 G => active pixel
+  min_region_pixels: 64
+  morph_radius_px: 2
+
+track:
+  iou_threshold: 0.2              # min rotation-compensated IoU to link boxes
+  max_gap_frames: 2               # tolerate this many missed frames before retiring
+
 forecast:
   lookback_hours: 24           # feature history fed to the model
   lead_hours: 24               # forecast horizon; features end strictly before this window
