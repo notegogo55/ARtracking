@@ -59,6 +59,27 @@ def test_crossval_climatology_has_no_skill():
     assert len(y_oof) == len(p_oof) == n
 
 
+def test_holdout_freezes_threshold_and_reports(tmp_path):
+    from solarflare.forecast.validate import holdout_evaluate, roc_plot
+
+    rng = np.random.default_rng(3)
+    n = 200
+    X = rng.normal(size=(n, 6, 2)).astype(np.float32)
+    y = (rng.random(n) < 0.3).astype(int)
+    X[y == 1, :, 0] += 1.5
+    t0 = _times(n)
+    table, predictions, fitted = holdout_evaluate(
+        X[:150], y[:150], t0[:150], X[150:], y[150:], ["a", "b"],
+        horizon_steps=3, model_names=("climatology", "holt_winters"),
+    )
+    assert set(table["model"]) == {"climatology", "holt_winters"}
+    assert {"tss", "hss", "bss", "threshold"} <= set(table.columns)
+    y_te, p_te = predictions["holt_winters"]
+    assert len(y_te) == len(p_te) == 50
+    out = roc_plot(predictions, tmp_path / "roc.png")
+    assert out.exists()
+
+
 def test_aggregate_table_orders_by_tss():
     per_fold = pd.DataFrame([
         {"model": "a", "fold": 0, "tss": 0.2, "hss": 0.1, "bss": 0.0,

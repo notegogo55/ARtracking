@@ -153,6 +153,68 @@ def aggregate_table(per_fold: pd.DataFrame) -> pd.DataFrame:
     return agg.sort_values("tss_mean", ascending=False).reset_index()
 
 
+def holdout_evaluate(
+    X_train: np.ndarray, y_train: np.ndarray, t0_train: pd.Series,
+    X_test: np.ndarray, y_test: np.ndarray, feature_names: list[str],
+    horizon_steps: int, seed: int = 1337,
+    model_names: tuple[str, ...] = ("climatology", "holt_winters", "lstm", "ensemble"),
+    curves_dir: Path | None = None, lstm_overrides: dict | None = None,
+) -> tuple[pd.DataFrame, dict[str, tuple[np.ndarray, np.ndarray]], dict]:
+    """Train on one time block, evaluate ONCE on a held-out one.
+
+    The train block is split chronologically 80/20; the 20% tail provides
+    early stopping and the operating threshold, frozen before touching test.
+    Returns (metrics table, {model: (y_test, p_test)}, fitted models).
+    """
+    factories = make_models(feature_names, horizon_steps, seed, curves_dir,
+                            lstm_overrides)
+    order = np.argsort(pd.to_datetime(t0_train).to_numpy(), kind="stable")
+    cut = max(int(0.8 * len(order)), 1)
+    inner_tr, inner_va = order[:cut], order[cut:]
+    base_rate = float(np.mean(y_train[inner_tr]))
+    rows, predictions, fitted_models = [], {}, {}
+    for name in model_names:
+        fitted = fit_model(factories[name], X_train[inner_tr], y_train[inner_tr],
+                           X_train[inner_va], y_train[inner_va])
+        thr, _ = best_tss_threshold(
+            y_train[inner_va], fitted.predict_proba(X_train[inner_va]))
+        p_test = fitted.predict_proba(X_test)
+        rows.append({"model": name, **summarize(y_test, p_test, thr, base_rate)})
+        predictions[name] = (y_test, p_test)
+        fitted_models[name] = fitted
+        log.info("holdout %s: tss=%.3f (thr=%.3f)", name, rows[-1]["tss"], thr)
+    table = pd.DataFrame(rows).sort_values("tss", ascending=False).reset_index(drop=True)
+    return table, predictions, fitted_models
+
+
+def roc_plot(
+    results: dict[str, tuple[np.ndarray, np.ndarray]], out_path: str | Path
+) -> Path:
+    """ROC curves (with AUC) for {model: (y_true, p)}."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from sklearn.metrics import auc, roc_curve
+
+    fig, ax = plt.subplots(figsize=(6, 5), constrained_layout=True)
+    ax.plot([0, 1], [0, 1], "k--", lw=1, label="no skill")
+    for name, (y, p) in results.items():
+        if len(np.unique(y)) < 2:
+            continue
+        fpr, tpr, _ = roc_curve(y, p)
+        ax.plot(fpr, tpr, label=f"{name} (AUC {auc(fpr, tpr):.3f})")
+    ax.set_xlabel("false positive rate")
+    ax.set_ylabel("true positive rate")
+    ax.set_title("ROC — held-out time block")
+    ax.legend(loc="lower right")
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=130)
+    plt.close(fig)
+    return out_path
+
+
 def reliability_plot(
     results: dict[str, tuple[np.ndarray, np.ndarray]], out_path: str | Path,
     n_bins: int = 10,

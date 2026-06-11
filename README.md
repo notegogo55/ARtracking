@@ -163,6 +163,35 @@ the GOES record (positives exactly the three issuances preceding the X2.2).
 Single-AR for now — the builder is multi-AR; balance matures as Phase 1
 fetches more windows.
 
+## Phase 4: forecasting (Gate G4 closed 2026-06-11)
+
+Models in `solarflare/forecast/`: climatology, Holt-trend + logistic
+calibration, PyTorch LSTM (pos-weighted BCE, early stop on val TSS,
+train-only standardization), and their ensemble. Validation is always
+chronological with an embargo; operating thresholds are chosen on validation
+tails and frozen. De-risk benchmark: **SWAN-SF** (12 h × 12-min SHARP-parameter
+instances; ≥M within 24 h; DeFN-style inputs), streamed straight from the
+tar.gz (`solarflare swansf-prepare`).
+
+Time-blocked 3-fold CV, 12 000-instance subsample per partition:
+
+| model | TSS P3 (CV) | TSS P4 (replication) |
+|---|---|---|
+| LSTM | **0.770 ± 0.030** | 0.795 ± 0.131 |
+| ensemble | 0.769 ± 0.025 | 0.791 ± 0.128 |
+| Holt-Winters | 0.758 ± 0.015 | **0.855 ± 0.053** |
+| climatology | 0.000 | 0.000 |
+
+Gate G4 (LSTM > baselines on the validation blocks) passes on P3; the honest
+cross-partition read is **LSTM ≈ Holt-Winters within error, both ≫
+climatology**, in the same band as published SWAN-SF/DeFN results. Lookback
+sweep (3/6/12 h): TSS 0.761/0.766/0.770. Known issue (visible in the
+reliability diagram): pos-weighted training inflates LSTM probabilities
+(negative BSS) — TSS is unaffected; calibration is Phase 5/E work.
+Run on our own MVP sequences via the same CLI (`forecast-benchmark --dataset
+data/datasets/seq_v1 --embargo-hours 2`); with n=14 those numbers are
+integration proof, not evidence.
+
 ## Conventions
 
 - All times UTC (naive ISO-8601). Single global seed (`project.seed`).

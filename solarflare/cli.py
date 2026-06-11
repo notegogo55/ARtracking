@@ -695,6 +695,163 @@ def forecast_sweep(
     typer.echo(f"sweep table: {out_dir / 'lookback_sweep.csv'}")
 
 
+@app.command("run-all")
+def run_all_cmd(
+    window: Annotated[str, typer.Option("--window", "-w")],
+    config: ConfigOpt = DEFAULT_CONFIG,
+    noaa: Annotated[int | None, typer.Option()] = None,
+    email: Annotated[str, typer.Option(help="JSOC email (only needed if fetch "
+                                            "is not cached)")] = "",
+    force: Annotated[str, typer.Option(help="Comma list of stages to force-rebuild "
+                                            "(fetch,segment,features)")] = "",
+    eval_models: Annotated[str, typer.Option()] = "climatology,holt_winters",
+    eval_folds: Annotated[int, typer.Option()] = 2,
+    eval_embargo_hours: Annotated[float, typer.Option()] = 2.0,
+) -> None:
+    """Gate G5: stages A->E end-to-end on one window, with per-stage caching."""
+    import json
+
+    from solarflare.pipeline import run_all
+
+    cfg = _load(config)
+    manifest = run_all(
+        cfg, window, noaa=noaa, email=email or os.environ.get("JSOC_EMAIL", ""),
+        force=frozenset(s.strip() for s in force.split(",") if s.strip()),
+        eval_models=eval_models, eval_folds=eval_folds,
+        eval_embargo_hours=eval_embargo_hours,
+    )
+    typer.echo(json.dumps(
+        {"plan": manifest["plan"],
+         "dataset": manifest["stages"]["dataset"],
+         "evaluate": manifest["stages"]["evaluate"],
+         "total_seconds": manifest["total_seconds"]}, indent=2, default=str))
+
+
+@app.command("forecast-holdout")
+def forecast_holdout(
+    train_dataset: Annotated[Path, typer.Option(exists=True, file_okay=False)],
+    test_dataset: Annotated[Path, typer.Option(exists=True, file_okay=False)],
+    config: ConfigOpt = DEFAULT_CONFIG,
+    models: Annotated[str, typer.Option()] = "climatology,holt_winters,lstm,ensemble",
+    max_epochs: Annotated[int | None, typer.Option()] = None,
+    horizon_steps: Annotated[int, typer.Option()] = 24,
+    tag: Annotated[str, typer.Option()] = "holdout",
+) -> None:
+    """Train on one time block, evaluate ONCE on a held-out block (+ROC/reliability)."""
+    import numpy as np
+    import pandas as pd
+
+    from solarflare.forecast.validate import holdout_evaluate, reliability_plot, roc_plot
+
+    cfg = _load(config)
+
+    def _load_ds(d: Path):
+        data = np.load(d / "X.npz", allow_pickle=False)
+        samples = pd.read_parquet(d / "samples.parquet")
+        return (data["X"], samples["label"].to_numpy(dtype=int),
+                pd.to_datetime(samples["t0"]), [str(n) for n in data["feature_names"]])
+
+    X_tr, y_tr, t_tr, names_tr = _load_ds(train_dataset)
+    X_te, y_te, _, names_te = _load_ds(test_dataset)
+    if names_tr != names_te:
+        typer.secho("train/test feature names differ", fg="red")
+        raise typer.Exit(code=1)
+    out_dir = Path(cfg.paths.outputs_dir) / "forecast" / tag
+    out_dir.mkdir(parents=True, exist_ok=True)
+    table, predictions, _ = holdout_evaluate(
+        X_tr, y_tr, t_tr, X_te, y_te, names_tr, horizon_steps=horizon_steps,
+        seed=cfg.project.seed,
+        model_names=tuple(m.strip() for m in models.split(",")),
+        curves_dir=out_dir / "curves",
+        lstm_overrides={"max_epochs": max_epochs} if max_epochs else None,
+    )
+    table.to_csv(out_dir / "holdout_metrics.csv", index=False)
+    reliability_plot(predictions, out_dir / "reliability.png")
+    roc_plot(predictions, out_dir / "roc.png")
+    typer.echo(table[["model", "tss", "hss", "bss", "precision", "recall"]]
+               .round(4).to_string(index=False))
+    typer.echo(f"outputs: {out_dir}")
+    for _, row in table.iterrows():
+        append_experiment_row(
+            cfg.paths.experiment_log,
+            {"phase": "P5", "experiment": f"holdout_{tag}", "model": row["model"],
+             "train": str(train_dataset), "test": str(test_dataset),
+             "tss": round(float(row["tss"]), 4), "hss": round(float(row["hss"]), 4),
+             "bss": round(float(row["bss"]), 4), "config_hash": cfg.short_hash()},
+        )
+
+
+@app.command("ablate")
+def ablate(
+    train_dataset: Annotated[Path, typer.Option(exists=True, file_okay=False)],
+    config: ConfigOpt = DEFAULT_CONFIG,
+    test_dataset: Annotated[Path | None, typer.Option(
+        help="Evaluate importance on this block (default: 20% tail of train)")] = None,
+    max_epochs: Annotated[int, typer.Option()] = 15,
+    n_repeats: Annotated[int, typer.Option()] = 3,
+    drop_one: Annotated[str, typer.Option(
+        help="Comma list of focus groups to also drop-one retrain "
+             "(e.g. aia_0131,aia_0304,hmi_magnetogram... group names = base features)"
+    )] = "",
+    tag: Annotated[str, typer.Option()] = "ablation",
+) -> None:
+    """Gate G5 ablation: grouped permutation importance (+optional drop-one retrains)."""
+    import numpy as np
+    import pandas as pd
+
+    from solarflare.eval.metrics import best_tss_threshold
+    from solarflare.forecast.ablation import (
+        ablation_bar_chart,
+        drop_one_retrain,
+        permutation_importance,
+    )
+    from solarflare.forecast.lstm import LSTMConfig, LSTMForecaster
+
+    cfg = _load(config)
+    data = np.load(train_dataset / "X.npz", allow_pickle=False)
+    X = data["X"]
+    names = [str(n) for n in data["feature_names"]]
+    samples = pd.read_parquet(train_dataset / "samples.parquet")
+    y = samples["label"].to_numpy(dtype=int)
+    order = np.argsort(pd.to_datetime(samples["t0"]).to_numpy(), kind="stable")
+    cut = max(int(0.8 * len(order)), 1)
+    tr, va = order[:cut], order[cut:]
+
+    lstm_cfg = LSTMConfig(seed=cfg.project.seed, max_epochs=max_epochs)
+    model = LSTMForecaster(lstm_cfg, name="ablation_lstm").fit(X[tr], y[tr], X[va], y[va])
+    thr, _ = best_tss_threshold(y[va], model.predict_proba(X[va]))
+
+    if test_dataset is not None:
+        te = np.load(test_dataset / "X.npz", allow_pickle=False)
+        te_samples = pd.read_parquet(test_dataset / "samples.parquet")
+        X_eval, y_eval = te["X"], te_samples["label"].to_numpy(dtype=int)
+    else:
+        X_eval, y_eval = X[va], y[va]
+
+    out_dir = Path(cfg.paths.outputs_dir) / "forecast" / tag
+    out_dir.mkdir(parents=True, exist_ok=True)
+    table = permutation_importance(model, X_eval, y_eval, names, thr,
+                                   n_repeats=n_repeats, seed=cfg.project.seed)
+    table.to_csv(out_dir / "permutation_importance.csv", index=False)
+    ablation_bar_chart(table, out_dir / "permutation_importance.png",
+                       f"Permutation importance ({tag})")
+    typer.echo(table.round(4).to_string(index=False))
+
+    if drop_one:
+        focus = [g.strip() for g in drop_one.split(",") if g.strip()]
+
+        def train_fn(X_tr, y_tr, X_va, y_va):
+            return LSTMForecaster(lstm_cfg, name="dropone_lstm").fit(
+                X_tr, y_tr, X_va, y_va)
+
+        drop_table = drop_one_retrain(train_fn, X[tr], y[tr], X[va], y[va],
+                                      X_eval, y_eval, names, focus,
+                                      seed=cfg.project.seed)
+        drop_table.to_csv(out_dir / "drop_one.csv", index=False)
+        typer.echo(drop_table.round(4).to_string(index=False))
+    typer.echo(f"outputs: {out_dir}")
+
+
 @app.command("qa-overlay")
 def qa_overlay(
     sample_dir: Annotated[Path, typer.Option("--sample-dir", exists=True, file_okay=False)],
