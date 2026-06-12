@@ -26,8 +26,17 @@ solarflare/        package
   config.py        pydantic schema for configs/*.yaml
   cli.py           Typer CLI (`solarflare ...`)
 configs/           YAML configs (study scope, channels, lead time, splits, seed)
+app/               Streamlit results dashboard (all outputs in one place)
 scripts/           thin wrappers around CLI commands
 tests/             offline pytest suite (synthetic fixtures, no downloads)
+docs/              architecture, reproducibility, module reference, build prompts
+reports/           written reports + tracked figures
+data/              (untracked) raw FITS, caches, datasets; data/weights/ = YOLO base
+outputs/           (untracked) experiment artifacts:
+  logs/            run logs            figures/   one-off QA images
+  forecast/        metric CSVs+plots   detect/    trained YOLO weights
+  dashboard/       prob-dashboard MP4  harpmap/   full-disk HARP-map MP4
+  runs/            run-all manifests   tracks/    tracker outputs
 ```
 
 ## Quickstart (Windows PowerShell)
@@ -218,8 +227,23 @@ integration proof, not evidence.
   the correlated-features caveat documented. The same harness on the n=14
   MVP dataset runs but yields no signal (reported as anecdotal, no conclusion).
 - Evaluation report with tables + figures: `reports/report_phase5.md`
-  (regenerate via `uv run python scripts/build_report.py`). Streamlit
-  dashboard: deferred (optional in spec).
+  (regenerate via `uv run python scripts/build_report.py`).
+
+## Results dashboard (Streamlit)
+
+Everything the pipeline has produced — holdout metrics, ablation, the
+experiment log, rendered videos, the frame-by-frame AR viewer and the written
+reports — in one multipage app:
+
+```powershell
+uv run --group app streamlit run app/main.py
+```
+
+Pages: overview (key TSS numbers + pipeline status) · forecast runs ·
+feature importance · AR viewer (scrub frames, export MP4) · video gallery
+(`render-dashboard` / `render-harpmap` / sample clips) · experiment log ·
+reports. The app only reads `outputs/`, `reports/` and `data/cache/` — pages
+degrade to a hint when an artifact has not been generated yet.
 
 ## Conventions
 

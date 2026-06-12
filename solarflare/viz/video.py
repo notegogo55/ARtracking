@@ -1,8 +1,10 @@
 """Frame-by-frame videos of a cached AR sample (detection/segmentation view).
 
 Renders continuum + magnetogram + one AIA channel side by side with the AR
-mask contour and GOES flare annotations, then encodes MP4 via OpenCV (mp4v —
-no ffmpeg dependency). The same compositor feeds the Streamlit app.
+mask contour and GOES flare annotations, then encodes MP4 as H.264/yuv420p via
+the ffmpeg binary bundled with imageio-ffmpeg, so the files play in browsers
+(and therefore in the Streamlit dashboard — OpenCV's mp4v does not). The same
+compositor feeds the Streamlit app.
 """
 
 from __future__ import annotations
@@ -28,13 +30,47 @@ def _apply_colormap(scaled: np.ndarray, cmap_name: str) -> np.ndarray:
     return (rgba[..., :3] * 255).astype(np.uint8)
 
 
-def _draw_mask_outline(rgb: np.ndarray, mask: np.ndarray,
-                       color: tuple[int, int, int]) -> np.ndarray:
+def _draw_mask_outline(
+    rgb: np.ndarray, mask: np.ndarray, color: tuple[int, int, int]
+) -> np.ndarray:
     import cv2
 
-    contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL,
-                                   cv2.CHAIN_APPROX_SIMPLE)
+    contours, _ = cv2.findContours(
+        mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
     return cv2.drawContours(rgb.copy(), contours, -1, color, 1)
+
+
+class Mp4Writer:
+    """Streaming H.264/yuv420p MP4 encoder (browser-playable).
+
+    Drop-in replacement for the cv2.VideoWriter pattern: construct with the
+    frame size, call write_rgb() per frame, close() when done. Odd dimensions
+    are handled by ffmpeg (macro_block_size=2 pads to even, as yuv420p needs).
+    """
+
+    def __init__(self, out_path: Path | str, size: tuple[int, int], fps: int) -> None:
+        import imageio_ffmpeg
+
+        self.size = size  # (width, height)
+        self._gen = imageio_ffmpeg.write_frames(
+            str(out_path),
+            size,
+            fps=fps,
+            codec="libx264",
+            quality=8,
+            pix_fmt_in="rgb24",
+            pix_fmt_out="yuv420p",
+            macro_block_size=2,
+            output_params=["-movflags", "+faststart"],
+        )
+        self._gen.send(None)  # prime the generator (starts the ffmpeg process)
+
+    def write_rgb(self, rgb: np.ndarray) -> None:
+        self._gen.send(np.ascontiguousarray(rgb))
+
+    def close(self) -> None:
+        self._gen.close()
 
 
 class SampleScaling:
@@ -57,17 +93,23 @@ class SampleScaling:
 
 
 def compose_frame(
-    sample, masks: np.ndarray, frame_idx: int, channel_key: str,
-    scaling: SampleScaling, flare_note: str = "",
+    sample,
+    masks: np.ndarray,
+    frame_idx: int,
+    channel_key: str,
+    scaling: SampleScaling,
+    flare_note: str = "",
 ) -> np.ndarray:
     """One (H, 3W+pad, 3) RGB frame: continuum | magnetogram | AIA, mask outlined."""
     import cv2
 
     mask = masks[frame_idx].astype(bool)
-    cont = _apply_colormap(_scale_gray(np.asarray(sample.arrays["hmi_continuum"][frame_idx]),
-                                       *scaling.cont), "afmhot")
-    mag = _apply_colormap(_scale_gray(np.asarray(sample.arrays["hmi_magnetogram"][frame_idx]),
-                                      *scaling.mag), "gray")
+    cont = _apply_colormap(
+        _scale_gray(np.asarray(sample.arrays["hmi_continuum"][frame_idx]), *scaling.cont), "afmhot"
+    )
+    mag = _apply_colormap(
+        _scale_gray(np.asarray(sample.arrays["hmi_magnetogram"][frame_idx]), *scaling.mag), "gray"
+    )
     aia_raw = np.asarray(sample.arrays[channel_key][frame_idx], dtype=np.float32)
     aia = _apply_colormap(np.sqrt(_scale_gray(aia_raw, *scaling.aia)), "inferno")
 
@@ -81,14 +123,25 @@ def compose_frame(
 
     time_utc = pd.Timestamp(sample.times["time_utc"].iloc[frame_idx])
     header = np.zeros((28, row.shape[1], 3), dtype=np.uint8)
-    label = (f"NOAA {sample.meta.get('noaa')} / HARP {sample.meta.get('harp')}   "
-             f"{time_utc:%Y-%m-%d %H:%M} UT   continuum | B_los | "
-             f"{channel_key.replace('aia_', 'AIA ')} A")
-    cv2.putText(header, label, (8, 19), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
-                (255, 255, 255), 1, cv2.LINE_AA)
+    label = (
+        f"NOAA {sample.meta.get('noaa')} / HARP {sample.meta.get('harp')}   "
+        f"{time_utc:%Y-%m-%d %H:%M} UT   continuum | B_los | "
+        f"{channel_key.replace('aia_', 'AIA ')} A"
+    )
+    cv2.putText(
+        header, label, (8, 19), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA
+    )
     if flare_note:
-        cv2.putText(header, flare_note, (row.shape[1] - 170, 19),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 80, 255), 2, cv2.LINE_AA)
+        cv2.putText(
+            header,
+            flare_note,
+            (row.shape[1] - 170, 19),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (0, 80, 255),
+            2,
+            cv2.LINE_AA,
+        )
     return np.concatenate([header, row], axis=0)
 
 
@@ -110,9 +163,13 @@ def flare_annotations(sample, window_minutes: float = 45.0) -> dict[int, str]:
 
 
 def render_sample_video(
-    sample, masks: np.ndarray, out_path: str | Path,
-    channel: int = 171, start: pd.Timestamp | None = None,
-    end: pd.Timestamp | None = None, fps: int = 12,
+    sample,
+    masks: np.ndarray,
+    out_path: str | Path,
+    channel: int = 171,
+    start: pd.Timestamp | None = None,
+    end: pd.Timestamp | None = None,
+    fps: int = 12,
     max_width: int = 1920,
 ) -> Path:
     """Encode the sample as MP4 over [start, end] (defaults: full range)."""
@@ -141,19 +198,16 @@ def render_sample_video(
 
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    writer = cv2.VideoWriter(str(out_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, size)
-    if not writer.isOpened():
-        raise RuntimeError("OpenCV VideoWriter failed to open (mp4v)")
+    writer = Mp4Writer(out_path, size, fps)
     try:
         for n, idx in enumerate(frame_ids):
-            rgb = compose_frame(sample, masks, int(idx), key, scaling,
-                                notes.get(int(idx), ""))
+            rgb = compose_frame(sample, masks, int(idx), key, scaling, notes.get(int(idx), ""))
             if scale < 1.0:
                 rgb = cv2.resize(rgb, size, interpolation=cv2.INTER_AREA)
-            writer.write(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+            writer.write_rgb(rgb)
             if (n + 1) % 100 == 0:
                 log.info("rendered %d/%d frames", n + 1, len(frame_ids))
     finally:
-        writer.release()
+        writer.close()
     log.info("video: %s (%d frames @ %d fps, %s)", out_path, len(frame_ids), fps, size)
     return out_path

@@ -23,6 +23,7 @@ dependencies = [
     "statsmodels>=0.14",
     "scikit-learn>=1.5",
     "tabulate>=0.9",
+    "imageio-ffmpeg>=0.5",
 ]
 
 [dependency-groups]

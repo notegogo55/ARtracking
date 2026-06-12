@@ -225,6 +225,7 @@ def render_harpmap(
     import sunpy.map
 
     from solarflare.detect.bootstrap import boxes_to_pixels, fetch_harp_boxes
+    from solarflare.viz.video import Mp4Writer
 
     window = next(w for w in cfg.study.windows if w.name == window_name)
     fulldisk_dir = Path(cfg.paths.data_root) / "raw" / "fulldisk" / window_name
@@ -255,15 +256,10 @@ def render_harpmap(
             cv2.cvtColor(frame, cv2.COLOR_RGB2BGR),
         )
         if writer is None:
-            writer = cv2.VideoWriter(
-                str(mp4_path),
-                cv2.VideoWriter_fourcc(*"mp4v"),
-                fps,
-                (frame.shape[1], frame.shape[0]),
-            )
-        writer.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+            writer = Mp4Writer(mp4_path, (frame.shape[1], frame.shape[0]), fps)
+        writer.write_rgb(frame)
         n += 1
     if writer is not None:
-        writer.release()
+        writer.close()
     log.info("harpmap: %s (%d frames) + %s", mp4_path, n, frames_dir)
     return mp4_path, n

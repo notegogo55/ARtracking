@@ -135,7 +135,7 @@ class DetectConfig(_StrictModel):
     rebin_scale: float = Field(default=0.25, gt=0, le=1)  # 4096 px -> 1024 px
     image_clip_gauss: float = Field(default=300.0, gt=0)
     min_box_arcsec: float = Field(default=20.0, ge=0)
-    yolo_model: str = "yolo11n.pt"
+    yolo_model: str = "data/weights/yolo11n.pt"
     yolo_imgsz: int = Field(default=640, gt=0)
     yolo_epochs: int = Field(default=40, gt=0)
     # Window-blocked splits (never random): names must reference study windows.

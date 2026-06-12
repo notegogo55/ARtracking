@@ -44,8 +44,7 @@ def render_disk(fulldisk_map, size: int = 880) -> np.ndarray:
     yy, xx = np.mgrid[0:h, 0:w]
     cx = float(fulldisk_map.wcs.wcs.crpix[0]) - 1
     cy = float(fulldisk_map.wcs.wcs.crpix[1]) - 1
-    r_pix = float(fulldisk_map.rsun_obs.to_value("arcsec")
-                  / abs(fulldisk_map.scale[0].value))
+    r_pix = float(fulldisk_map.rsun_obs.to_value("arcsec") / abs(fulldisk_map.scale[0].value))
     rr = np.hypot(xx - cx, yy - cy) / r_pix
     on_disk = rr <= 1.0
 
@@ -63,8 +62,12 @@ def render_disk(fulldisk_map, size: int = 880) -> np.ndarray:
 
 
 def compose_dashboard_frame(
-    fulldisk_map, boxes_px: pd.DataFrame, probs: dict[int, float],
-    time_utc: pd.Timestamp, model_note: str, size: int = 880,
+    fulldisk_map,
+    boxes_px: pd.DataFrame,
+    probs: dict[int, float],
+    time_utc: pd.Timestamp,
+    model_note: str,
+    size: int = 880,
 ) -> np.ndarray:
     """One dashboard frame. boxes_px needs harpnum/noaa_ar + x/y_min/max (FITS px)."""
     import cv2
@@ -86,33 +89,77 @@ def compose_dashboard_frame(
         noaa = int(b.get("noaa_ar", 0) or 0)
         tag = f"AR {noaa}" if noaa else f"HARP {harp}"
         label = f"{tag}  {p * 100:.0f}%" if p is not None else tag
-        cv2.putText(disk, label, (x0, max(14, y0 - 6)), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.45, color, 1, cv2.LINE_AA)
+        cv2.putText(
+            disk,
+            label,
+            (x0, max(14, y0 - 6)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            color,
+            1,
+            cv2.LINE_AA,
+        )
         rows.append((tag, p, band))
 
     header = np.zeros((46, size, 3), dtype=np.uint8)
-    cv2.putText(header, "Solar Flare Probability Dashboard", (12, 24),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2, cv2.LINE_AA)
-    cv2.putText(header, f"{time_utc:%Y-%m-%d %H:%M} UT   P(>=M, 24h)", (12, 42),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1, cv2.LINE_AA)
+    cv2.putText(
+        header,
+        "Solar Flare Probability Dashboard",
+        (12, 24),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.75,
+        (255, 255, 255),
+        2,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        header,
+        f"{time_utc:%Y-%m-%d %H:%M} UT   P(>=M, 24h)",
+        (12, 42),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.45,
+        (200, 200, 200),
+        1,
+        cv2.LINE_AA,
+    )
 
     footer = np.zeros((58, size, 3), dtype=np.uint8)
     x = 12
     for band, color in BAND_COLORS.items():
         cv2.rectangle(footer, (x, 10), (x + 14, 24), color, -1)
-        cv2.putText(footer, f"{band}-band", (x + 20, 22), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.45, (220, 220, 220), 1, cv2.LINE_AA)
+        cv2.putText(
+            footer,
+            f"{band}-band",
+            (x + 20, 22),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            (220, 220, 220),
+            1,
+            cv2.LINE_AA,
+        )
         x += 110
     cv2.rectangle(footer, (x, 10), (x + 14, 24), NO_DATA_COLOR, -1)
-    cv2.putText(footer, "no sample", (x + 20, 22), cv2.FONT_HERSHEY_SIMPLEX,
-                0.45, (220, 220, 220), 1, cv2.LINE_AA)
-    cv2.putText(footer, model_note, (12, 46), cv2.FONT_HERSHEY_SIMPLEX, 0.4,
-                (150, 150, 150), 1, cv2.LINE_AA)
+    cv2.putText(
+        footer,
+        "no sample",
+        (x + 20, 22),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.45,
+        (220, 220, 220),
+        1,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        footer, model_note, (12, 46), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (150, 150, 150), 1, cv2.LINE_AA
+    )
     return np.concatenate([header, disk, footer], axis=0)
 
 
 def build_probability_lookup(
-    cfg, sample_dirs: list[Path], model, lookback_steps: int,
+    cfg,
+    sample_dirs: list[Path],
+    model,
+    lookback_steps: int,
 ) -> pd.DataFrame:
     """[time, harpnum, p] for every issuance hour of every cached sample."""
     from solarflare.data.cache import load_sample
@@ -125,43 +172,50 @@ def build_probability_lookup(
         if not frame_csv.exists():
             continue
         features = build_frame_pipeline(
-            pd.read_csv(frame_csv, parse_dates=["time"]),
-            cfg.data.sample_cadence_minutes)
+            pd.read_csv(frame_csv, parse_dates=["time"]), cfg.data.sample_cadence_minutes
+        )
         cols = [c for c in features.columns if c != "time"]
         values = features[cols].to_numpy(dtype=np.float32)
         times = pd.to_datetime(features["time"])
         windows, t0s = [], []
         for end in range(lookback_steps - 1, len(features)):
-            windows.append(values[end - lookback_steps + 1: end + 1])
+            windows.append(values[end - lookback_steps + 1 : end + 1])
             t0s.append(times.iloc[end])
         if not windows:
             continue
         p = model.predict_proba(np.stack(windows))
-        frames.append(pd.DataFrame({
-            "time": t0s, "harpnum": int(sample.meta["harp"]), "p": p}))
+        frames.append(pd.DataFrame({"time": t0s, "harpnum": int(sample.meta["harp"]), "p": p}))
     if not frames:
         return pd.DataFrame(columns=["time", "harpnum", "p"])
     return pd.concat(frames, ignore_index=True)
 
 
 def render_dashboard(
-    cfg, window_name: str, out_dir: str | Path, model, model_note: str,
-    fps: int = 4, max_prob_age_hours: float = 3.0,
+    cfg,
+    window_name: str,
+    out_dir: str | Path,
+    model,
+    model_note: str,
+    fps: int = 4,
+    max_prob_age_hours: float = 3.0,
 ) -> tuple[Path, int]:
     """Frames + MP4 for one study window. Returns (mp4 path, n frames)."""
     import cv2
     import sunpy.map
 
     from solarflare.detect.bootstrap import boxes_to_pixels, fetch_harp_boxes
+    from solarflare.viz.video import Mp4Writer
 
     window = next(w for w in cfg.study.windows if w.name == window_name)
     fulldisk_dir = Path(cfg.paths.data_root) / "raw" / "fulldisk" / window_name
     fits_files = sorted(fulldisk_dir.glob("*.fits"))
     if not fits_files:
         raise FileNotFoundError(
-            f"no full-disk frames under {fulldisk_dir} - run build-detect-dataset")
-    boxes = fetch_harp_boxes(window.start, window.end,
-                             cfg.detect.bootstrap_cadence_hours, cfg.paths.cache_dir)
+            f"no full-disk frames under {fulldisk_dir} - run build-detect-dataset"
+        )
+    boxes = fetch_harp_boxes(
+        window.start, window.end, cfg.detect.bootstrap_cadence_hours, cfg.paths.cache_dir
+    )
 
     samples_root = Path(cfg.paths.cache_dir) / "samples"
     sample_dirs = [p for p in samples_root.glob("*") if (p / "meta.json").exists()]
@@ -188,14 +242,15 @@ def render_dashboard(
                 nearest = grp.iloc[(pd.to_datetime(grp["time"]) - t).abs().argmin()]
                 probs[int(harp)] = float(nearest["p"])
         frame = compose_dashboard_frame(smap, px, probs, t, model_note)
-        cv2.imwrite(str(frames_dir / f"{window_name}_{t:%Y%m%dT%H%M}.png"),
-                    cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+        cv2.imwrite(
+            str(frames_dir / f"{window_name}_{t:%Y%m%dT%H%M}.png"),
+            cv2.cvtColor(frame, cv2.COLOR_RGB2BGR),
+        )
         if writer is None:
-            writer = cv2.VideoWriter(str(mp4_path), cv2.VideoWriter_fourcc(*"mp4v"),
-                                     fps, (frame.shape[1], frame.shape[0]))
-        writer.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+            writer = Mp4Writer(mp4_path, (frame.shape[1], frame.shape[0]), fps)
+        writer.write_rgb(frame)
         n += 1
     if writer is not None:
-        writer.release()
+        writer.close()
     log.info("dashboard: %s (%d frames) + %s", mp4_path, n, frames_dir)
     return mp4_path, n

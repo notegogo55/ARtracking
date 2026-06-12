@@ -88,7 +88,7 @@ detect:
   rebin_scale: 0.25               # JSOC-side rebin: 4096 -> 1024 px (verified live)
   image_clip_gauss: 300           # +/- clip for 8-bit PNG conversion
   min_box_arcsec: 20              # drop degenerate HARP boxes
-  yolo_model: yolo11n.pt          # pretrained nano model (transfer learning)
+  yolo_model: data/weights/yolo11n.pt  # pretrained nano model (transfer learning)
   yolo_imgsz: 640
   yolo_epochs: 40
   # Window-blocked splits: train on Cycle-24 windows + quiet negatives,
