@@ -30,13 +30,14 @@ def fulldisk_map():
     from sunpy.coordinates import Helioprojective, get_earth
 
     obstime = "2011-02-14T12:00:00"
-    center = SkyCoord(0 * u.arcsec, 0 * u.arcsec,
-                      frame=Helioprojective(observer=get_earth(obstime),
-                                            obstime=obstime))
+    center = SkyCoord(
+        0 * u.arcsec,
+        0 * u.arcsec,
+        frame=Helioprojective(observer=get_earth(obstime), obstime=obstime),
+    )
     data = np.zeros((128, 128), dtype=np.float32)
     data[70:80, 60:75] = 800.0  # a strong-field region
-    header = sunpy.map.make_fitswcs_header(
-        data, center, scale=[16, 16] * u.arcsec / u.pix)
+    header = sunpy.map.make_fitswcs_header(data, center, scale=[16, 16] * u.arcsec / u.pix)
     return sunpy.map.Map(data, header)
 
 
@@ -51,16 +52,20 @@ def test_render_disk_shape_and_offdisk(fulldisk_map):
 
 
 def test_compose_dashboard_frame(fulldisk_map):
-    boxes = pd.DataFrame([
-        {"harpnum": 11, "noaa_ar": 90001, "x_min": 55, "x_max": 80,
-         "y_min": 65, "y_max": 85},
-        {"harpnum": 22, "noaa_ar": 0, "x_min": 30, "x_max": 45,
-         "y_min": 30, "y_max": 45},
-    ])
+    boxes = pd.DataFrame(
+        [
+            {"harpnum": 11, "noaa_ar": 90001, "x_min": 55, "x_max": 80, "y_min": 65, "y_max": 85},
+            {"harpnum": 22, "noaa_ar": 0, "x_min": 30, "x_max": 45, "y_min": 30, "y_max": 45},
+        ]
+    )
     frame = compose_dashboard_frame(
-        fulldisk_map, boxes, probs={11: 0.72},
+        fulldisk_map,
+        boxes,
+        probs={11: 0.72},
         time_utc=pd.Timestamp("2011-02-14 12:00"),
-        model_note="model: test", size=256)
+        model_note="model: test",
+        size=256,
+    )
     assert frame.dtype == np.uint8
     assert frame.shape[1] == 256
     assert frame.shape[0] > 256  # header + footer attached

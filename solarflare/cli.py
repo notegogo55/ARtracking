@@ -269,14 +269,21 @@ def fetch(
     if not email:
         typer.secho(
             "No JSOC email. Register at "
-            f"{JSOC_REGISTER_URL}\nthen:  $env:JSOC_EMAIL = \"you@example.com\"",
+            f'{JSOC_REGISTER_URL}\nthen:  $env:JSOC_EMAIL = "you@example.com"',
             fg="red",
         )
         raise typer.Exit(code=1)
 
     sample_dir = build_sample(
-        cfg, window, noaa=noaa, start=start, end=end, channels=channel,
-        email=email, skip_aia=skip_aia, overwrite=overwrite,
+        cfg,
+        window,
+        noaa=noaa,
+        start=start,
+        end=end,
+        channels=channel,
+        email=email,
+        skip_aia=skip_aia,
+        overwrite=overwrite,
     )
     sample = load_sample(sample_dir)
     typer.echo(f"cached:  {sample_dir}")
@@ -304,10 +311,13 @@ def bootstrap_boxes(
     if win is None:
         typer.secho(f"unknown window {window!r}", fg="red")
         raise typer.Exit(code=1)
-    boxes = fetch_harp_boxes(win.start, win.end, cfg.detect.bootstrap_cadence_hours,
-                             cfg.paths.cache_dir)
-    typer.echo(f"{len(boxes)} boxes, {boxes['harpnum'].nunique() if len(boxes) else 0} HARPs, "
-               f"{boxes['time'].nunique() if len(boxes) else 0} timesteps")
+    boxes = fetch_harp_boxes(
+        win.start, win.end, cfg.detect.bootstrap_cadence_hours, cfg.paths.cache_dir
+    )
+    typer.echo(
+        f"{len(boxes)} boxes, {boxes['harpnum'].nunique() if len(boxes) else 0} HARPs, "
+        f"{boxes['time'].nunique() if len(boxes) else 0} timesteps"
+    )
 
 
 @app.command("segment-sample")
@@ -329,8 +339,10 @@ def segment_sample_cmd(
     frame = qa_frame if qa_frame is not None else pick_overlay_frame(sample)
     qa_png = segmentation_qa_plot(sample, np.load(masks_path), frame)
     typer.echo(f"masks:   {masks_path}")
-    typer.echo(f"areas:   median AR {int(areas['ar_pixels'].median())} px, "
-               f"max {int(areas['ar_pixels'].max())} px over {len(areas)} frames")
+    typer.echo(
+        f"areas:   median AR {int(areas['ar_pixels'].median())} px, "
+        f"max {int(areas['ar_pixels'].max())} px over {len(areas)} frames"
+    )
     typer.echo(f"qa plot: {qa_png}")
 
 
@@ -339,7 +351,8 @@ def track_window(
     window: Annotated[str, typer.Option("--window", "-w")],
     config: ConfigOpt = DEFAULT_CONFIG,
     boxes_csv: Annotated[
-        Path | None, typer.Option(help="Track these boxes instead of HARP bootstrap ones"),
+        Path | None,
+        typer.Option(help="Track these boxes instead of HARP bootstrap ones"),
     ] = None,
 ) -> None:
     """Run the temporal-IoU tracker over a window's boxes; writes the track table."""
@@ -356,8 +369,9 @@ def track_window(
     if boxes_csv is not None:
         boxes = pd.read_csv(boxes_csv, parse_dates=["time"])
     else:
-        boxes = fetch_harp_boxes(win.start, win.end, cfg.detect.bootstrap_cadence_hours,
-                                 cfg.paths.cache_dir)
+        boxes = fetch_harp_boxes(
+            win.start, win.end, cfg.detect.bootstrap_cadence_hours, cfg.paths.cache_dir
+        )
     tracked = track_boxes(boxes, cfg.track.iou_threshold, cfg.track.max_gap_frames)
     report = track_report(tracked)
     out_dir = Path(cfg.paths.outputs_dir)
@@ -365,8 +379,10 @@ def track_window(
     tracks_path = out_dir / f"tracks_{window}.csv"
     tracked.to_csv(tracks_path, index=False)
     typer.echo(report.to_string(index=False))
-    typer.echo(f"tracks:  {tracks_path}  ({tracked['track_id'].nunique()} tracks, "
-               f"{len(tracked)} observations)")
+    typer.echo(
+        f"tracks:  {tracks_path}  ({tracked['track_id'].nunique()} tracks, "
+        f"{len(tracked)} observations)"
+    )
 
 
 @app.command("build-detect-dataset")
@@ -392,7 +408,8 @@ def build_detect_dataset(
 def train_detect(
     config: ConfigOpt = DEFAULT_CONFIG,
     dataset: Annotated[Path, typer.Option(help="dataset.yaml path")] = Path(
-        "data/detect_dataset/dataset.yaml"),
+        "data/detect_dataset/dataset.yaml"
+    ),
     epochs: Annotated[int | None, typer.Option(help="Override config epochs")] = None,
     device: Annotated[str | None, typer.Option(help="cpu / 0 / mps (default: auto)")] = None,
 ) -> None:
@@ -400,8 +417,9 @@ def train_detect(
     from solarflare.detect.yolo import train_detector
 
     cfg = _load(config)
-    weights = train_detector(cfg, dataset, Path(cfg.paths.outputs_dir) / "detect",
-                             epochs=epochs, device=device)
+    weights = train_detector(
+        cfg, dataset, Path(cfg.paths.outputs_dir) / "detect", epochs=epochs, device=device
+    )
     typer.echo(f"weights: {weights}")
 
 
@@ -427,12 +445,16 @@ def eval_detect(
     preds = predict_boxes(weights, images, conf=conf)
     metrics = evaluate_vs_truth(preds, truth, iou_match=iou_match)
     for key, value in metrics.items():
-        typer.echo(f"{key:>22}: {value:.4f}" if isinstance(value, float)
-                   else f"{key:>22}: {value}")
+        typer.echo(f"{key:>22}: {value:.4f}" if isinstance(value, float) else f"{key:>22}: {value}")
     append_experiment_row(
         cfg.paths.experiment_log,
-        {"phase": "P2", "experiment": f"detect_eval_{split}", "weights": str(weights),
-         "config_hash": cfg.short_hash(), **metrics},
+        {
+            "phase": "P2",
+            "experiment": f"detect_eval_{split}",
+            "weights": str(weights),
+            "config_hash": cfg.short_hash(),
+            **metrics,
+        },
     )
 
 
@@ -451,8 +473,9 @@ def build_features(
     sample = load_sample(sample_dir)
     masks_path = sample_dir / "ar_masks.npy"
     if not masks_path.exists():
-        typer.secho(f"no ar_masks.npy in {sample_dir} - run `solarflare segment-sample` first",
-                    fg="red")
+        typer.secho(
+            f"no ar_masks.npy in {sample_dir} - run `solarflare segment-sample` first", fg="red"
+        )
         raise typer.Exit(code=1)
     frame_df = extract_sample_features(sample, np.load(masks_path))
     out = sample_dir / "features_frame.csv"
@@ -504,21 +527,29 @@ def build_dataset(
         window = windows.get(meta.get("window"))
         lon_series = None
         if window is not None:
-            boxes = fetch_harp_boxes(window.start, window.end,
-                                     cfg.detect.bootstrap_cadence_hours, cfg.paths.cache_dir)
+            boxes = fetch_harp_boxes(
+                window.start, window.end, cfg.detect.bootstrap_cadence_hours, cfg.paths.cache_dir
+            )
             mine = boxes[boxes["harpnum"] == int(meta["harp"])]
             if len(mine):
                 lon_series = mine.set_index("time")["lon_fwt"].dropna()
         X, rows, feature_names = build_sequences(
-            features, sample.labels, noaa=int(meta["noaa"]), harp=int(meta["harp"]),
-            window_name=str(meta.get("window")), lookback_steps=lookback_steps,
+            features,
+            sample.labels,
+            noaa=int(meta["noaa"]),
+            harp=int(meta["harp"]),
+            window_name=str(meta.get("window")),
+            lookback_steps=lookback_steps,
             lead_hours=cfg.forecast.lead_hours,
             min_class=cfg.forecast.flare_class_threshold,
-            lon_series=lon_series, max_lon_deg=cfg.geometry.max_cm_longitude_deg,
+            lon_series=lon_series,
+            max_lon_deg=cfg.geometry.max_cm_longitude_deg,
             min_valid_fraction=cfg.features.min_valid_fraction,
         )
-        typer.echo(f"{sdir.name}: {len(rows)} sequences "
-                   f"({int(rows['label'].sum()) if len(rows) else 0} positive)")
+        typer.echo(
+            f"{sdir.name}: {len(rows)} sequences "
+            f"({int(rows['label'].sum()) if len(rows) else 0} positive)"
+        )
         if len(rows):
             all_X.append(X)
             all_rows.append(rows)
@@ -530,7 +561,10 @@ def build_dataset(
     samples_df = pd.concat(all_rows, ignore_index=True)
     out_dir = out or Path("data/datasets") / f"seq_{cfg.features.dataset_version}"
     stats = write_dataset(
-        out_dir, X, samples_df, feature_names,
+        out_dir,
+        X,
+        samples_df,
+        feature_names,
         {
             "cadence_minutes": cfg.data.sample_cadence_minutes,
             "lookback_steps": lookback_steps,
@@ -542,15 +576,22 @@ def build_dataset(
         },
     )
     typer.echo(f"dataset: {out_dir}")
-    typer.echo(f"class balance: {stats['n_positive']} pos / {stats['n_negative']} neg "
-               f"(rate {stats['positive_rate']:.3f}); "
-               f"missing cells: {stats['missing_fraction_overall']:.4f}")
+    typer.echo(
+        f"class balance: {stats['n_positive']} pos / {stats['n_negative']} neg "
+        f"(rate {stats['positive_rate']:.3f}); "
+        f"missing cells: {stats['missing_fraction_overall']:.4f}"
+    )
     append_experiment_row(
         cfg.paths.experiment_log,
-        {"phase": "P3", "experiment": "build_dataset", "config_hash": cfg.short_hash(),
-         "n_sequences": stats["n_sequences"], "n_positive": stats["n_positive"],
-         "positive_rate": stats["positive_rate"],
-         "missing_fraction": stats["missing_fraction_overall"]},
+        {
+            "phase": "P3",
+            "experiment": "build_dataset",
+            "config_hash": cfg.short_hash(),
+            "n_sequences": stats["n_sequences"],
+            "n_positive": stats["n_positive"],
+            "positive_rate": stats["positive_rate"],
+            "missing_fraction": stats["missing_fraction_overall"],
+        },
     )
 
 
@@ -569,28 +610,32 @@ def swansf_prepare(
     from solarflare.forecast.swansf import prepare_archive
 
     cfg = _load(config)
-    stats = prepare_archive(archive, out, max_instances=max_instances,
-                            seed=cfg.project.seed)
+    stats = prepare_archive(archive, out, max_instances=max_instances, seed=cfg.project.seed)
     for key, value in stats.items():
         typer.echo(f"{key:>18}: {value}")
 
 
 @app.command("forecast-benchmark")
 def forecast_benchmark(
-    dataset: Annotated[Path, typer.Option(exists=True, file_okay=False,
-                                          help="Dir with X.npz + samples.parquet")],
+    dataset: Annotated[
+        Path, typer.Option(exists=True, file_okay=False, help="Dir with X.npz + samples.parquet")
+    ],
     config: ConfigOpt = DEFAULT_CONFIG,
     models: Annotated[
         str, typer.Option(help="Comma list: climatology,holt_winters,lstm,ensemble")
     ] = "climatology,holt_winters,lstm,ensemble",
     folds: Annotated[int, typer.Option()] = 5,
-    lookback_steps: Annotated[int | None, typer.Option(
-        help="Truncate sequences to the last N steps")] = None,
-    horizon_steps: Annotated[int, typer.Option(
-        help="Holt-Winters extrapolation horizon (steps)")] = 24,
+    lookback_steps: Annotated[
+        int | None, typer.Option(help="Truncate sequences to the last N steps")
+    ] = None,
+    horizon_steps: Annotated[
+        int, typer.Option(help="Holt-Winters extrapolation horizon (steps)")
+    ] = 24,
     max_epochs: Annotated[int | None, typer.Option(help="Override LSTM epochs")] = None,
-    embargo_hours: Annotated[float | None, typer.Option(
-        help="Override split.embargo_hours (use small values for short datasets)")] = None,
+    embargo_hours: Annotated[
+        float | None,
+        typer.Option(help="Override split.embargo_hours (use small values for short datasets)"),
+    ] = None,
     out: Annotated[Path | None, typer.Option(help="Output dir")] = None,
     tag: Annotated[str, typer.Option(help="Run tag for outputs/experiment log")] = "bench",
 ) -> None:
@@ -618,37 +663,49 @@ def forecast_benchmark(
 
     lstm_overrides = {"max_epochs": max_epochs} if max_epochs else None
     per_fold, oof = crossval_table(
-        X, y, t0s, feature_names, horizon_steps=horizon_steps, n_folds=folds,
-        embargo_hours=(embargo_hours if embargo_hours is not None
-                       else cfg.split.embargo_hours),
+        X,
+        y,
+        t0s,
+        feature_names,
+        horizon_steps=horizon_steps,
+        n_folds=folds,
+        embargo_hours=(embargo_hours if embargo_hours is not None else cfg.split.embargo_hours),
         seed=cfg.project.seed,
         model_names=tuple(m.strip() for m in models.split(",")),
-        curves_dir=out_dir / "curves", lstm_overrides=lstm_overrides,
+        curves_dir=out_dir / "curves",
+        lstm_overrides=lstm_overrides,
     )
     if per_fold.empty:
-        typer.secho("no usable folds (embargo wiped the training data?) - "
-                    "try --embargo-hours 0 or fewer folds", fg="red")
+        typer.secho(
+            "no usable folds (embargo wiped the training data?) - "
+            "try --embargo-hours 0 or fewer folds",
+            fg="red",
+        )
         raise typer.Exit(code=1)
     per_fold.to_csv(out_dir / "metrics_per_fold.csv", index=False)
     table = aggregate_table(per_fold)
     table.to_csv(out_dir / "metrics_aggregate.csv", index=False)
     reliability_plot(oof, out_dir / "reliability.png")
 
-    show_cols = ["model"] + [c for c in table.columns
-                             if c.startswith(("tss", "hss", "bss"))]
+    show_cols = ["model"] + [c for c in table.columns if c.startswith(("tss", "hss", "bss"))]
     typer.echo(table[show_cols].round(4).to_string(index=False))
     typer.echo(f"outputs: {out_dir}")
     for _, row in table.iterrows():
         append_experiment_row(
             cfg.paths.experiment_log,
-            {"phase": "P4", "experiment": f"forecast_{tag}", "model": row["model"],
-             "dataset": str(dataset), "folds": folds,
-             "lookback_steps": lookback_steps or X.shape[1],
-             "tss_mean": round(float(row["tss_mean"]), 4),
-             "tss_std": round(float(row.get("tss_std", np.nan)), 4),
-             "hss_mean": round(float(row["hss_mean"]), 4),
-             "bss_mean": round(float(row["bss_mean"]), 4),
-             "config_hash": cfg.short_hash()},
+            {
+                "phase": "P4",
+                "experiment": f"forecast_{tag}",
+                "model": row["model"],
+                "dataset": str(dataset),
+                "folds": folds,
+                "lookback_steps": lookback_steps or X.shape[1],
+                "tss_mean": round(float(row["tss_mean"]), 4),
+                "tss_std": round(float(row.get("tss_std", np.nan)), 4),
+                "hss_mean": round(float(row["hss_mean"]), 4),
+                "bss_mean": round(float(row["bss_mean"]), 4),
+                "config_hash": cfg.short_hash(),
+            },
         )
 
 
@@ -680,17 +737,28 @@ def forecast_sweep(
     rows = []
     for steps in [int(s) for s in lookbacks.split(",")]:
         per_fold, _ = crossval_table(
-            X_full[:, -steps:, :], y, t0s, feature_names, horizon_steps=24,
-            n_folds=folds, embargo_hours=cfg.split.embargo_hours,
-            seed=cfg.project.seed, model_names=("lstm",),
+            X_full[:, -steps:, :],
+            y,
+            t0s,
+            feature_names,
+            horizon_steps=24,
+            n_folds=folds,
+            embargo_hours=cfg.split.embargo_hours,
+            seed=cfg.project.seed,
+            model_names=("lstm",),
             curves_dir=out_dir / f"curves_{steps}",
             lstm_overrides={"max_epochs": max_epochs},
         )
         agg = aggregate_table(per_fold).iloc[0]
-        rows.append({"lookback_steps": steps, "tss_mean": agg["tss_mean"],
-                     "tss_std": agg["tss_std"], "hss_mean": agg["hss_mean"]})
-        typer.echo(f"lookback {steps:>3} steps: TSS {agg['tss_mean']:.4f} "
-                   f"+/- {agg['tss_std']:.4f}")
+        rows.append(
+            {
+                "lookback_steps": steps,
+                "tss_mean": agg["tss_mean"],
+                "tss_std": agg["tss_std"],
+                "hss_mean": agg["hss_mean"],
+            }
+        )
+        typer.echo(f"lookback {steps:>3} steps: TSS {agg['tss_mean']:.4f} +/- {agg['tss_std']:.4f}")
     pd.DataFrame(rows).to_csv(out_dir / "lookback_sweep.csv", index=False)
     typer.echo(f"sweep table: {out_dir / 'lookback_sweep.csv'}")
 
@@ -700,10 +768,12 @@ def run_all_cmd(
     window: Annotated[str, typer.Option("--window", "-w")],
     config: ConfigOpt = DEFAULT_CONFIG,
     noaa: Annotated[int | None, typer.Option()] = None,
-    email: Annotated[str, typer.Option(help="JSOC email (only needed if fetch "
-                                            "is not cached)")] = "",
-    force: Annotated[str, typer.Option(help="Comma list of stages to force-rebuild "
-                                            "(fetch,segment,features)")] = "",
+    email: Annotated[
+        str, typer.Option(help="JSOC email (only needed if fetch is not cached)")
+    ] = "",
+    force: Annotated[
+        str, typer.Option(help="Comma list of stages to force-rebuild (fetch,segment,features)")
+    ] = "",
     eval_models: Annotated[str, typer.Option()] = "climatology,holt_winters",
     eval_folds: Annotated[int, typer.Option()] = 2,
     eval_embargo_hours: Annotated[float, typer.Option()] = 2.0,
@@ -715,16 +785,27 @@ def run_all_cmd(
 
     cfg = _load(config)
     manifest = run_all(
-        cfg, window, noaa=noaa, email=email or os.environ.get("JSOC_EMAIL", ""),
+        cfg,
+        window,
+        noaa=noaa,
+        email=email or os.environ.get("JSOC_EMAIL", ""),
         force=frozenset(s.strip() for s in force.split(",") if s.strip()),
-        eval_models=eval_models, eval_folds=eval_folds,
+        eval_models=eval_models,
+        eval_folds=eval_folds,
         eval_embargo_hours=eval_embargo_hours,
     )
-    typer.echo(json.dumps(
-        {"plan": manifest["plan"],
-         "dataset": manifest["stages"]["dataset"],
-         "evaluate": manifest["stages"]["evaluate"],
-         "total_seconds": manifest["total_seconds"]}, indent=2, default=str))
+    typer.echo(
+        json.dumps(
+            {
+                "plan": manifest["plan"],
+                "dataset": manifest["stages"]["dataset"],
+                "evaluate": manifest["stages"]["evaluate"],
+                "total_seconds": manifest["total_seconds"],
+            },
+            indent=2,
+            default=str,
+        )
+    )
 
 
 @app.command("forecast-holdout")
@@ -748,8 +829,12 @@ def forecast_holdout(
     def _load_ds(d: Path):
         data = np.load(d / "X.npz", allow_pickle=False)
         samples = pd.read_parquet(d / "samples.parquet")
-        return (data["X"], samples["label"].to_numpy(dtype=int),
-                pd.to_datetime(samples["t0"]), [str(n) for n in data["feature_names"]])
+        return (
+            data["X"],
+            samples["label"].to_numpy(dtype=int),
+            pd.to_datetime(samples["t0"]),
+            [str(n) for n in data["feature_names"]],
+        )
 
     X_tr, y_tr, t_tr, names_tr = _load_ds(train_dataset)
     X_te, y_te, _, names_te = _load_ds(test_dataset)
@@ -759,7 +844,13 @@ def forecast_holdout(
     out_dir = Path(cfg.paths.outputs_dir) / "forecast" / tag
     out_dir.mkdir(parents=True, exist_ok=True)
     table, predictions, _ = holdout_evaluate(
-        X_tr, y_tr, t_tr, X_te, y_te, names_tr, horizon_steps=horizon_steps,
+        X_tr,
+        y_tr,
+        t_tr,
+        X_te,
+        y_te,
+        names_tr,
+        horizon_steps=horizon_steps,
         seed=cfg.project.seed,
         model_names=tuple(m.strip() for m in models.split(",")),
         curves_dir=out_dir / "curves",
@@ -768,16 +859,24 @@ def forecast_holdout(
     table.to_csv(out_dir / "holdout_metrics.csv", index=False)
     reliability_plot(predictions, out_dir / "reliability.png")
     roc_plot(predictions, out_dir / "roc.png")
-    typer.echo(table[["model", "tss", "hss", "bss", "precision", "recall"]]
-               .round(4).to_string(index=False))
+    typer.echo(
+        table[["model", "tss", "hss", "bss", "precision", "recall"]].round(4).to_string(index=False)
+    )
     typer.echo(f"outputs: {out_dir}")
     for _, row in table.iterrows():
         append_experiment_row(
             cfg.paths.experiment_log,
-            {"phase": "P5", "experiment": f"holdout_{tag}", "model": row["model"],
-             "train": str(train_dataset), "test": str(test_dataset),
-             "tss": round(float(row["tss"]), 4), "hss": round(float(row["hss"]), 4),
-             "bss": round(float(row["bss"]), 4), "config_hash": cfg.short_hash()},
+            {
+                "phase": "P5",
+                "experiment": f"holdout_{tag}",
+                "model": row["model"],
+                "train": str(train_dataset),
+                "test": str(test_dataset),
+                "tss": round(float(row["tss"]), 4),
+                "hss": round(float(row["hss"]), 4),
+                "bss": round(float(row["bss"]), 4),
+                "config_hash": cfg.short_hash(),
+            },
         )
 
 
@@ -785,14 +884,19 @@ def forecast_holdout(
 def ablate(
     train_dataset: Annotated[Path, typer.Option(exists=True, file_okay=False)],
     config: ConfigOpt = DEFAULT_CONFIG,
-    test_dataset: Annotated[Path | None, typer.Option(
-        help="Evaluate importance on this block (default: 20% tail of train)")] = None,
+    test_dataset: Annotated[
+        Path | None,
+        typer.Option(help="Evaluate importance on this block (default: 20% tail of train)"),
+    ] = None,
     max_epochs: Annotated[int, typer.Option()] = 15,
     n_repeats: Annotated[int, typer.Option()] = 3,
-    drop_one: Annotated[str, typer.Option(
-        help="Comma list of focus groups to also drop-one retrain "
-             "(e.g. aia_0131,aia_0304,hmi_magnetogram... group names = base features)"
-    )] = "",
+    drop_one: Annotated[
+        str,
+        typer.Option(
+            help="Comma list of focus groups to also drop-one retrain "
+            "(e.g. aia_0131,aia_0304,hmi_magnetogram... group names = base features)"
+        ),
+    ] = "",
     tag: Annotated[str, typer.Option()] = "ablation",
 ) -> None:
     """Gate G5 ablation: grouped permutation importance (+optional drop-one retrains)."""
@@ -830,23 +934,33 @@ def ablate(
 
     out_dir = Path(cfg.paths.outputs_dir) / "forecast" / tag
     out_dir.mkdir(parents=True, exist_ok=True)
-    table = permutation_importance(model, X_eval, y_eval, names, thr,
-                                   n_repeats=n_repeats, seed=cfg.project.seed)
+    table = permutation_importance(
+        model, X_eval, y_eval, names, thr, n_repeats=n_repeats, seed=cfg.project.seed
+    )
     table.to_csv(out_dir / "permutation_importance.csv", index=False)
-    ablation_bar_chart(table, out_dir / "permutation_importance.png",
-                       f"Permutation importance ({tag})")
+    ablation_bar_chart(
+        table, out_dir / "permutation_importance.png", f"Permutation importance ({tag})"
+    )
     typer.echo(table.round(4).to_string(index=False))
 
     if drop_one:
         focus = [g.strip() for g in drop_one.split(",") if g.strip()]
 
         def train_fn(X_tr, y_tr, X_va, y_va):
-            return LSTMForecaster(lstm_cfg, name="dropone_lstm").fit(
-                X_tr, y_tr, X_va, y_va)
+            return LSTMForecaster(lstm_cfg, name="dropone_lstm").fit(X_tr, y_tr, X_va, y_va)
 
-        drop_table = drop_one_retrain(train_fn, X[tr], y[tr], X[va], y[va],
-                                      X_eval, y_eval, names, focus,
-                                      seed=cfg.project.seed)
+        drop_table = drop_one_retrain(
+            train_fn,
+            X[tr],
+            y[tr],
+            X[va],
+            y[va],
+            X_eval,
+            y_eval,
+            names,
+            focus,
+            seed=cfg.project.seed,
+        )
         drop_table.to_csv(out_dir / "drop_one.csv", index=False)
         typer.echo(drop_table.round(4).to_string(index=False))
     typer.echo(f"outputs: {out_dir}")
@@ -875,8 +989,9 @@ def render_video(
         typer.secho("no ar_masks.npy - run `solarflare segment-sample` first", fg="red")
         raise typer.Exit(code=1)
     out = out or sample_dir / f"video_{channel:04d}.mp4"
-    path = render_sample_video(sample, np.load(masks_path), out, channel=channel,
-                               start=start, end=end, fps=fps)
+    path = render_sample_video(
+        sample, np.load(masks_path), out, channel=channel, start=start, end=end, fps=fps
+    )
     typer.echo(f"video: {path}")
 
 
@@ -884,9 +999,9 @@ def render_video(
 def render_dashboard_cmd(
     window: Annotated[str, typer.Option("--window", "-w")],
     config: ConfigOpt = DEFAULT_CONFIG,
-    dataset: Annotated[Path, typer.Option(
-        help="Sequence dataset used to fit the probability model")] = Path(
-        "data/datasets/seq_v1"),
+    dataset: Annotated[
+        Path, typer.Option(help="Sequence dataset used to fit the probability model")
+    ] = Path("data/datasets/seq_v1"),
     model: Annotated[str, typer.Option(help="holt_winters | lstm")] = "holt_winters",
     fps: Annotated[int, typer.Option()] = 4,
     out: Annotated[Path | None, typer.Option()] = None,
@@ -907,13 +1022,32 @@ def render_dashboard_cmd(
     order = np.argsort(pd.to_datetime(samples["t0"]).to_numpy(), kind="stable")
     cut = max(int(0.8 * len(order)), 1)
     factories = make_models(names, horizon_steps=X.shape[1], seed=cfg.project.seed)
-    fitted = fit_model(factories[model], X[order[:cut]], y[order[:cut]],
-                       X[order[cut:]], y[order[cut:]])
-    note = (f"model: {model} fitted on {dataset.name} "
-            f"(n={len(samples)}, pos={int(y.sum())})"
-            + ("  [MVP - anecdotal sample size]" if len(samples) < 200 else ""))
+    fitted = fit_model(
+        factories[model], X[order[:cut]], y[order[:cut]], X[order[cut:]], y[order[cut:]]
+    )
+    note = f"model: {model} fitted on {dataset.name} (n={len(samples)}, pos={int(y.sum())})" + (
+        "  [MVP - anecdotal sample size]" if len(samples) < 200 else ""
+    )
     out_dir = out or Path(cfg.paths.outputs_dir) / "dashboard" / window
     mp4, n = render_dashboard(cfg, window, out_dir, fitted, note, fps=fps)
+    typer.echo(f"clip:   {mp4}  ({n} frames)")
+    typer.echo(f"frames: {out_dir / 'frames'}")
+
+
+@app.command("render-harpmap")
+def render_harpmap_cmd(
+    window: Annotated[str, typer.Option("--window", "-w")],
+    config: ConfigOpt = DEFAULT_CONFIG,
+    fps: Annotated[int, typer.Option()] = 4,
+    size: Annotated[int, typer.Option(help="Disk panel size in px")] = 880,
+    out: Annotated[Path | None, typer.Option()] = None,
+) -> None:
+    """JSOC-style Tracked AR (HARP) full-disk map: PNG frames + MP4 clip."""
+    from solarflare.viz.harpmap import render_harpmap
+
+    cfg = _load(config)
+    out_dir = out or Path(cfg.paths.outputs_dir) / "harpmap" / window
+    mp4, n = render_harpmap(cfg, window, out_dir, fps=fps, size=size)
     typer.echo(f"clip:   {mp4}  ({n} frames)")
     typer.echo(f"frames: {out_dir / 'frames'}")
 
