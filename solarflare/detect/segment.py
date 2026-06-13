@@ -5,8 +5,8 @@ Two masks per frame on the SHARP CEA patch:
   median is a robust quiet-Sun proxy because spots cover a small area fraction);
 - active mask:  |B_los| above a Gauss threshold.
 The AR mask (their union) is the boundary Phase C uses for max-intensity
-feature extraction. A U-Net (segmentation-models-pytorch) is the stretch
-upgrade and would slot in behind the same interface.
+feature extraction. The trained U-Net upgrade (solarflare.detect.unet) sits
+behind the same interface; `segment_sample_auto` dispatches on cfg.method.
 """
 
 from __future__ import annotations
@@ -63,9 +63,7 @@ def ar_mask(continuum: np.ndarray, blos: np.ndarray, cfg) -> np.ndarray:
     """AR boundary mask = sunspots OR strong-field pixels (cfg: SegmentConfig)."""
     return sunspot_mask(
         continuum, cfg.spot_threshold, cfg.min_region_pixels, cfg.morph_radius_px
-    ) | active_mask(
-        blos, cfg.bfield_threshold_gauss, cfg.min_region_pixels, cfg.morph_radius_px
-    )
+    ) | active_mask(blos, cfg.bfield_threshold_gauss, cfg.min_region_pixels, cfg.morph_radius_px)
 
 
 def segment_sample(sample, cfg) -> tuple[Path, pd.DataFrame]:
@@ -79,28 +77,49 @@ def segment_sample(sample, cfg) -> tuple[Path, pd.DataFrame]:
     masks = np.zeros(blos.shape, dtype=np.uint8)
     rows = []
     for i in range(n_frames):
-        spot = sunspot_mask(np.asarray(continuum[i]), cfg.spot_threshold,
-                            cfg.min_region_pixels, cfg.morph_radius_px)
-        active = active_mask(np.asarray(blos[i]), cfg.bfield_threshold_gauss,
-                             cfg.min_region_pixels, cfg.morph_radius_px)
+        spot = sunspot_mask(
+            np.asarray(continuum[i]), cfg.spot_threshold, cfg.min_region_pixels, cfg.morph_radius_px
+        )
+        active = active_mask(
+            np.asarray(blos[i]),
+            cfg.bfield_threshold_gauss,
+            cfg.min_region_pixels,
+            cfg.morph_radius_px,
+        )
         masks[i] = (spot | active).astype(np.uint8)
-        rows.append({
-            "frame_idx": i,
-            "spot_pixels": int(spot.sum()),
-            "active_pixels": int(active.sum()),
-            "ar_pixels": int(masks[i].sum()),
-        })
+        rows.append(
+            {
+                "frame_idx": i,
+                "spot_pixels": int(spot.sum()),
+                "active_pixels": int(active.sum()),
+                "ar_pixels": int(masks[i].sum()),
+            }
+        )
     areas = pd.DataFrame(rows)
     masks_path = Path(sample.sample_dir) / "ar_masks.npy"
     np.save(masks_path, masks)
     areas.to_csv(Path(sample.sample_dir) / "ar_mask_areas.csv", index=False)
-    log.info("segmented %d frames -> %s (median AR area %d px)",
-             n_frames, masks_path, int(areas["ar_pixels"].median()))
+    log.info(
+        "segmented %d frames -> %s (median AR area %d px)",
+        n_frames,
+        masks_path,
+        int(areas["ar_pixels"].median()),
+    )
     return masks_path, areas
 
 
-def segmentation_qa_plot(sample, masks: np.ndarray, frame_idx: int,
-                         out_path: str | Path | None = None) -> Path:
+def segment_sample_auto(sample, cfg) -> tuple[Path, pd.DataFrame]:
+    """Dispatch on cfg.method: threshold baseline or trained U-Net (same outputs)."""
+    if cfg.method == "unet":
+        from solarflare.detect.unet import segment_sample_unet
+
+        return segment_sample_unet(sample, cfg)
+    return segment_sample(sample, cfg)
+
+
+def segmentation_qa_plot(
+    sample, masks: np.ndarray, frame_idx: int, out_path: str | Path | None = None
+) -> Path:
     """Continuum + magnetogram with the AR mask contour, for visual QA."""
     import matplotlib
 

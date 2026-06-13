@@ -13,19 +13,30 @@ def _toy_sample(tmp_path):
         "hmi_magnetogram": rng.normal(0, 100, (3, 4, 5)).astype(np.float32),
         channel_key(171): rng.random((3, 4, 5)).astype(np.float32),
     }
-    times = pd.DataFrame({
-        "frame_idx": [0, 1, 2],
-        "time_utc": pd.to_datetime(
-            ["2099-01-01T00:00", "2099-01-01T00:12", "2099-01-01T00:24"]),
-    })
-    qa = pd.DataFrame({
-        "frame_idx": [0, 0], "channel": ["hmi_magnetogram", "aia_0171"],
-        "flagged": [False, True],
-    })
-    labels = pd.DataFrame({
-        "start_time": ["2099-01-01T00:05"], "peak_time": ["2099-01-01T00:10"],
-        "end_time": ["2099-01-01T00:20"], "goes_class": ["M1.5"], "noaa_ar": [90001],
-    })
+    times = pd.DataFrame(
+        {
+            "frame_idx": [0, 1, 2],
+            "time_utc": pd.to_datetime(
+                ["2099-01-01T00:00", "2099-01-01T00:12", "2099-01-01T00:24"]
+            ),
+        }
+    )
+    qa = pd.DataFrame(
+        {
+            "frame_idx": [0, 0],
+            "channel": ["hmi_magnetogram", "aia_0171"],
+            "flagged": [False, True],
+        }
+    )
+    labels = pd.DataFrame(
+        {
+            "start_time": ["2099-01-01T00:05"],
+            "peak_time": ["2099-01-01T00:10"],
+            "end_time": ["2099-01-01T00:20"],
+            "goes_class": ["M1.5"],
+            "noaa_ar": [90001],
+        }
+    )
     meta = {"noaa": 90001, "harp": 11, "window": "w1"}
     return write_sample(tmp_path / "s", arrays, times, qa, labels, meta), arrays
 
@@ -43,6 +54,21 @@ def test_round_trip(tmp_path):
     assert bool(sample.qa["flagged"].iloc[1]) is True
 
 
+def test_derived_arrays_excluded_and_overwritable(tmp_path):
+    """ar_masks.npy is a product, not a channel: never mmap'd by load_sample.
+
+    Regression: on Windows a live read-only mmap blocks overwriting the file,
+    so re-running segment-sample on an already-segmented sample crashed.
+    """
+    sample_dir, _ = _toy_sample(tmp_path)
+    np.save(sample_dir / "ar_masks.npy", np.zeros((3, 4, 5), dtype=np.uint8))
+    sample = load_sample(sample_dir)
+    assert "ar_masks" not in sample.arrays
+    # overwrite must succeed while the sample (mmaps) is still alive
+    np.save(sample_dir / "ar_masks.npy", np.ones((3, 4, 5), dtype=np.uint8))
+    assert np.load(sample_dir / "ar_masks.npy").max() == 1
+
+
 def test_channel_key():
     assert channel_key(94) == "aia_0094"
     assert channel_key(1700) == "aia_1700"
@@ -58,7 +84,9 @@ def test_empty_labels_ok(tmp_path):
         tmp_path / "s2",
         {"hmi_magnetogram": np.zeros((1, 2, 2), dtype=np.float32)},
         pd.DataFrame({"frame_idx": [0], "time_utc": pd.to_datetime(["2099-01-01"])}),
-        pd.DataFrame(), pd.DataFrame(), {},
+        pd.DataFrame(),
+        pd.DataFrame(),
+        {},
     )
     sample = load_sample(tmp_path / "s2")
     assert sample.labels.empty and sample.qa.empty

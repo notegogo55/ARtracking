@@ -135,7 +135,7 @@ class DetectConfig(_StrictModel):
     rebin_scale: float = Field(default=0.25, gt=0, le=1)  # 4096 px -> 1024 px
     image_clip_gauss: float = Field(default=300.0, gt=0)
     min_box_arcsec: float = Field(default=20.0, ge=0)
-    yolo_model: str = "data/weights/yolo11n.pt"
+    yolo_model: str = "data/weights/yolo26n.pt"
     yolo_imgsz: int = Field(default=640, gt=0)
     yolo_epochs: int = Field(default=40, gt=0)
     # Window-blocked splits (never random): names must reference study windows.
@@ -145,12 +145,35 @@ class DetectConfig(_StrictModel):
 
 
 class SegmentConfig(_StrictModel):
-    """Stage B segmentation baseline: threshold + morphology (U-Net is a stretch goal)."""
+    """Stage B segmentation: threshold baseline or trained U-Net behind the same interface.
 
+    The U-Net is trained on the threshold masks as pseudo-labels (no hand labels
+    exist), with a time-blocked train/val split per sample (no leakage).
+    """
+
+    method: Literal["threshold", "unet"] = "threshold"
     spot_threshold: float = Field(default=0.85, gt=0, lt=1)  # fraction of quiet-Sun median
     bfield_threshold_gauss: float = Field(default=100.0, gt=0)
     min_region_pixels: int = Field(default=64, ge=1)
     morph_radius_px: int = Field(default=2, ge=1)
+    # --- U-Net (segmentation-models-pytorch), used when method == "unet" ---
+    unet_encoder: str = "resnet18"
+    unet_pretrained: bool = True  # ImageNet encoder weights (downloaded on first run)
+    unet_epochs: int = Field(default=20, gt=0)
+    unet_lr: float = Field(default=1e-3, gt=0)
+    unet_batch_size: int = Field(default=8, gt=0)
+    unet_tile_px: int = Field(default=224, ge=32)  # random-crop size; multiple of 32
+    unet_crops_per_epoch: int = Field(default=256, gt=0)
+    unet_val_fraction: float = Field(default=0.2, gt=0, lt=1)  # tail frames of each sample
+    unet_prob_threshold: float = Field(default=0.5, gt=0, lt=1)
+    unet_weights: Path = Path("outputs/segment/unet/unet_best.pt")
+
+    @field_validator("unet_tile_px")
+    @classmethod
+    def _tile_divisible(cls, v: int) -> int:
+        if v % 32:
+            raise ValueError("unet_tile_px must be a multiple of 32 (encoder stride)")
+        return v
 
 
 class TrackConfig(_StrictModel):

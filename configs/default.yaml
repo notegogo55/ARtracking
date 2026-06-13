@@ -71,7 +71,8 @@ data:
   hmi_segments: [magnetogram, continuum]   # LOS magnetogram + continuum from the CEA series
   aia_euv_series: aia.lev1_euv_12s
   aia_uv_series: aia.lev1_uv_24s           # 1600/1700 A
-  hmi_cadence_seconds: 720
+  hmi_cadence_seconds: 3600               # hourly SHARP subsample (was 720); ~5x fewer files,
+                                          # forecast features resample to 60 min anyway
   aia_cadence_seconds: 3600                # hourly: features are hourly anyway (bulk-run lever)
   aia_match_tolerance_seconds: 1800        # max |AIA - HMI| timestamp gap when stacking
   cutout_pad_arcsec: 40                    # padding around the HARP box for AIA cutouts
@@ -88,7 +89,7 @@ detect:
   rebin_scale: 0.25               # JSOC-side rebin: 4096 -> 1024 px (verified live)
   image_clip_gauss: 300           # +/- clip for 8-bit PNG conversion
   min_box_arcsec: 20              # drop degenerate HARP boxes
-  yolo_model: data/weights/yolo11n.pt  # pretrained nano model (transfer learning)
+  yolo_model: data/weights/yolo26n.pt  # pretrained nano model (transfer learning; YOLO26 = NMS-free e2e)
   yolo_imgsz: 640
   yolo_epochs: 40
   # Window-blocked splits: train on Cycle-24 windows + quiet negatives,
@@ -98,10 +99,23 @@ detect:
   test_windows: [ar13664_may2024]
 
 segment:
+  method: unet               # threshold | unet (unet needs `solarflare train-unet` first)
   spot_threshold: 0.85            # continuum < 0.85 x quiet-Sun median => sunspot
   bfield_threshold_gauss: 100     # |B_los| > 100 G => active pixel
   min_region_pixels: 64
   morph_radius_px: 2
+  # U-Net upgrade: trained on the threshold masks as pseudo-labels,
+  # time-blocked train/val split per sample (tail frames held out).
+  unet_encoder: resnet18
+  unet_pretrained: true           # ImageNet encoder init (downloaded on first run)
+  unet_epochs: 20
+  unet_lr: 0.001
+  unet_batch_size: 8
+  unet_tile_px: 224               # random-crop size; must be a multiple of 32
+  unet_crops_per_epoch: 256
+  unet_val_fraction: 0.2
+  unet_prob_threshold: 0.5
+  unet_weights: outputs/segment/unet/unet_best.pt
 
 track:
   iou_threshold: 0.2              # min rotation-compensated IoU to link boxes

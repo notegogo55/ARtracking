@@ -324,16 +324,31 @@ def bootstrap_boxes(
 def segment_sample_cmd(
     sample_dir: Annotated[Path, typer.Option("--sample-dir", exists=True, file_okay=False)],
     config: ConfigOpt = DEFAULT_CONFIG,
+    method: Annotated[
+        str | None, typer.Option(help="threshold | unet (default: config segment.method)")
+    ] = None,
+    weights: Annotated[
+        Path | None, typer.Option(help="U-Net weights (default: config segment.unet_weights)")
+    ] = None,
     qa_frame: Annotated[int | None, typer.Option(help="Frame for the QA plot")] = None,
 ) -> None:
-    """Threshold+morphology AR masks for a cached sample; writes masks + QA plot."""
+    """AR masks for a cached sample (threshold baseline or U-Net); writes masks + QA plot."""
     from solarflare.data.cache import load_sample
-    from solarflare.detect.segment import segment_sample, segmentation_qa_plot
+    from solarflare.detect.segment import segment_sample_auto, segmentation_qa_plot
     from solarflare.viz.overlay import pick_overlay_frame
 
     cfg = _load(config)
+    if method is not None and method not in ("threshold", "unet"):
+        typer.secho(f"unknown --method {method!r} (threshold | unet)", fg="red")
+        raise typer.Exit(code=1)
+    seg_cfg = cfg.segment.model_copy(
+        update={
+            **({"method": method} if method else {}),
+            **({"unet_weights": weights} if weights else {}),
+        }
+    )
     sample = load_sample(sample_dir)
-    masks_path, areas = segment_sample(sample, cfg.segment)
+    masks_path, areas = segment_sample_auto(sample, seg_cfg)
     import numpy as np
 
     frame = qa_frame if qa_frame is not None else pick_overlay_frame(sample)
@@ -344,6 +359,68 @@ def segment_sample_cmd(
         f"max {int(areas['ar_pixels'].max())} px over {len(areas)} frames"
     )
     typer.echo(f"qa plot: {qa_png}")
+
+
+@app.command("train-unet")
+def train_unet_cmd(
+    config: ConfigOpt = DEFAULT_CONFIG,
+    samples_root: Annotated[
+        Path | None, typer.Option(help="Dir of cached samples (default: <cache_dir>/samples)")
+    ] = None,
+    epochs: Annotated[int | None, typer.Option(help="Override config unet_epochs")] = None,
+    device: Annotated[str, typer.Option(help="cpu / cuda")] = "cpu",
+    weights_out: Annotated[
+        Path | None, typer.Option(help="Output weights (default: config segment.unet_weights)")
+    ] = None,
+) -> None:
+    """Train the U-Net on threshold pseudo-labels from every cached sample.
+
+    Time-blocked split: the tail `unet_val_fraction` of each sample's frames is
+    validation-only. Saves the best-val-IoU checkpoint + training_log.csv.
+    """
+    from solarflare.data.cache import load_sample
+    from solarflare.detect.unet import train_unet
+
+    cfg = _load(config)
+    root = samples_root or Path(cfg.paths.cache_dir) / "samples"
+    sample_dirs = sorted(p for p in root.glob("*") if (p / "meta.json").exists())
+    samples = []
+    for sdir in sample_dirs:
+        sample = load_sample(sdir)
+        if {"hmi_continuum", "hmi_magnetogram"} <= set(sample.arrays):
+            samples.append(sample)
+        else:
+            typer.secho(f"[skip] {sdir.name}: missing HMI continuum/magnetogram", fg="yellow")
+    if not samples:
+        typer.secho(f"no usable cached samples under {root}", fg="red")
+        raise typer.Exit(code=1)
+    typer.echo(f"training on {len(samples)} cached sample(s) from {root}")
+    weights, history = train_unet(
+        samples,
+        cfg.segment,
+        weights_path=weights_out,
+        epochs=epochs,
+        device=device,
+        seed=cfg.project.seed,
+    )
+    best = history["val_iou"].max()
+    typer.echo(history.round(4).to_string(index=False))
+    typer.echo(f"weights: {weights}  (best val IoU {best:.4f})")
+    typer.echo("use it with:  segment.method: unet  (or `segment-sample --method unet`)")
+    append_experiment_row(
+        cfg.paths.experiment_log,
+        {
+            "phase": "P2",
+            "experiment": "unet_train",
+            "config_hash": cfg.short_hash(),
+            "seed": cfg.project.seed,
+            "n_samples": len(samples),
+            "epochs": len(history),
+            "encoder": cfg.segment.unet_encoder,
+            "best_val_iou": round(float(best), 4),
+            "weights": str(weights),
+        },
+    )
 
 
 @app.command("track-window")
