@@ -108,8 +108,9 @@ def fetch_goes_events(
     if len(hek_table) == 0:
         df = pd.DataFrame(columns=EVENT_COLUMNS)
     else:
-        sub = hek_table["event_starttime", "event_peaktime", "event_endtime",
-                        "fl_goescls", "ar_noaanum"]
+        sub = hek_table[
+            "event_starttime", "event_peaktime", "event_endtime", "fl_goescls", "ar_noaanum"
+        ]
         df = pd.DataFrame(
             {
                 "start_time": pd.to_datetime([str(v) for v in sub["event_starttime"]]),
@@ -125,6 +126,12 @@ def fetch_goes_events(
         df = df.sort_values("peak_time").reset_index(drop=True)
 
     if cache_dir is not None:
-        df.to_csv(cache_file, index=False)
-        log.info("cached %d events to %s", len(df), cache_file)
+        if df.empty:
+            # An empty answer is indistinguishable from a transient HEK outage
+            # (observed 2026-06-13: a network blip cached 0 events for a window
+            # containing an X5.4). Always re-query rather than poison the cache.
+            log.warning("HEK returned 0 events for %s..%s - NOT caching", start, end)
+        else:
+            df.to_csv(cache_file, index=False)
+            log.info("cached %d events to %s", len(df), cache_file)
     return df
