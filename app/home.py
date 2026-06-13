@@ -47,7 +47,7 @@ stages = pd.DataFrame(
         ),
         (
             "B — ตรวจจับ/ติดตาม",
-            "YOLO11n + threshold mask + temporal-IoU tracker",
+            "YOLO26n + threshold/U-Net mask + temporal-IoU tracker",
             "✅ เสร็จ (Gate G2)",
         ),
         ("C — ฟีเจอร์", "max-in-mask รายช่อง AIA, ฟลักซ์แม่เหล็ก, gradient ย้อนหลัง", "✅ เสร็จ"),

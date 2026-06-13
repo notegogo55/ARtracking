@@ -31,9 +31,13 @@ column-set may grow).
 - `bootstrap`: AR boxes from HARP keywords (Stonyhurst bounds), projection to
   full-disk pixels through the map WCS (handles CROTA2=180).
 - `segment`: threshold+morphology sunspot/active/AR masks; `segment_sample`
-  writes `ar_masks.npy` + areas + QA plot. (U-Net = stretch slot.)
+  writes `ar_masks.npy` + areas + QA plot; `segment_sample_auto` dispatches
+  threshold vs U-Net on `segment.method`.
+- `unet`: U-Net upgrade (segmentation-models-pytorch) trained on the threshold
+  masks as pseudo-labels, time-blocked per-sample split (`train_unet`,
+  `segment_sample_unet` — same output files as the baseline).
 - `dataset` / `yolo`: bounded rebinned full-disk YOLO dataset with
-  window-blocked splits; Ultralytics fine-tune/predict/eval-vs-SHARP.
+  window-blocked splits; Ultralytics (YOLO26n) fine-tune/predict/eval-vs-SHARP.
 - `track.iou`: rotation-compensated temporal-IoU tracker (`track_boxes`),
   time-based gap budget, majority-vote HARP attachment, `track_report`.
 

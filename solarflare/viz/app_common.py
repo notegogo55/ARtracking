@@ -46,9 +46,10 @@ def round_floats(df: pd.DataFrame, ndigits: int = 4) -> pd.DataFrame:
 def list_videos() -> list[tuple[str, Path]]:
     """รวบรวมไฟล์ .mp4 ทั้งหมด (หมวด, path) จาก outputs/ และ sample cache"""
     groups = [
+        ("YOLO26 detection (กล่อง AR บน full-disk magnetogram)", OUTPUTS / "detect"),
         ("Flare-probability dashboard (มุมมองแบบ DeFN)", OUTPUTS / "dashboard"),
         ("Tracked-AR full-disk map (มุมมองแบบ JSOC HARP)", OUTPUTS / "harpmap"),
-        ("คลิป AR รายตัวจาก sample cache", SAMPLES),
+        ("คลิป AR รายตัว + U-Net mask จาก sample cache", SAMPLES),
     ]
     found: list[tuple[str, Path]] = []
     for label, root in groups:

@@ -25,6 +25,7 @@ from solarflare.data.jsoc_fetch import (
     cutout_corners_from_map,
     fetch_aia_cutouts,
     fetch_sharp_cutouts,
+    fetch_with_retry,
 )
 from solarflare.data.preprocess import (
     exposure_normalize,
@@ -46,8 +47,9 @@ def resolve_window_target(
 ) -> tuple[StudyWindow, StudyTarget]:
     window = next((w for w in cfg.study.windows if w.name == window_name), None)
     if window is None:
-        raise ValueError(f"unknown study window {window_name!r}; "
-                         f"known: {[w.name for w in cfg.study.windows]}")
+        raise ValueError(
+            f"unknown study window {window_name!r}; known: {[w.name for w in cfg.study.windows]}"
+        )
     if not window.targets:
         raise ValueError(f"window {window_name!r} has no AR targets (quiet window?)")
     if noaa is None:
@@ -71,42 +73,47 @@ def _load_hmi_stacks(
     """
     import sunpy.map
 
-    by_segment: dict[str, list] = {seg: [] for seg in segments}
+    # Map each segment's frames by exact T_REC so segments are aligned by time,
+    # not by sorted index: a download gap or cadence subsample can leave a
+    # timestamp with only some segments, and zipping by index would silently
+    # misalign the stacks. Keep only timestamps present in EVERY segment.
+    by_segment: dict[str, dict[pd.Timestamp, object]] = {seg: {} for seg in segments}
     for path in files:
         name = path.name.lower()
         seg = next((s for s in segments if s.lower() in name), None)
         if seg is None:
             log.warning("cannot assign segment for %s; skipping", path.name)
             continue
-        by_segment[seg].append(sunpy.map.Map(str(path)))
-    for seg, maps in by_segment.items():
-        if not maps:
+        m = sunpy.map.Map(str(path))
+        by_segment[seg][pd.Timestamp(m.date.datetime)] = m
+    for seg, frames in by_segment.items():
+        if not frames:
             raise RuntimeError(f"no files matched HMI segment {seg!r}")
-        maps.sort(key=lambda m: m.date.datetime)
 
-    anchor_seg = segments[0]
-    anchor_maps = by_segment[anchor_seg]
-    times = pd.DataFrame(
-        {
-            "frame_idx": range(len(anchor_maps)),
-            "time_utc": [pd.Timestamp(m.date.datetime) for m in anchor_maps],
-        }
-    )
+    common = sorted(set.intersection(*(set(frames) for frames in by_segment.values())))
+    if not common:
+        raise RuntimeError("no T_REC common to all HMI segments; JSOC export incomplete?")
+    dropped = max(len(frames) for frames in by_segment.values()) - len(common)
+    if dropped:
+        log.warning("dropping %d HMI timestamp(s) missing one or more segments", dropped)
+
+    anchor_maps = [by_segment[segments[0]][t] for t in common]
+    times = pd.DataFrame({"frame_idx": range(len(common)), "time_utc": list(common)})
     # Definitive HARP patches keep a constant pixel size over the disk passage;
     # crop defensively to the common minimum if that assumption is ever violated.
     min_shape = tuple(
-        min(m.data.shape[axis] for maps in by_segment.values() for m in maps)
+        min(by_segment[seg][t].data.shape[axis] for seg in segments for t in common)
         for axis in (0, 1)
     )
     stacks: dict[str, np.ndarray] = {}
-    for seg, maps in by_segment.items():
-        if len(maps) != len(anchor_maps):
-            raise RuntimeError(
-                f"segment {seg!r} has {len(maps)} frames vs {len(anchor_maps)} "
-                f"for {anchor_seg!r}; JSOC export incomplete?"
-            )
+    for seg in segments:
         arr = np.stack(
-            [np.asarray(m.data[: min_shape[0], : min_shape[1]], dtype=np.float32) for m in maps]
+            [
+                np.asarray(
+                    by_segment[seg][t].data[: min_shape[0], : min_shape[1]], dtype=np.float32
+                )
+                for t in common
+            ]
         )
         stacks[f"hmi_{seg}"] = arr
     return stacks, anchor_maps, times
@@ -142,23 +149,38 @@ def build_sample(
 
     # --- HMI SHARP segments (define the timeline and the target CEA grids) ---
     sharp_files = fetch_sharp_cutouts(
-        cfg.data.hmi_sharp_series, harp, t0, t1, cfg.data.hmi_segments,
-        email=email, out_dir=raw_root / f"sharp_{harp}", overwrite=overwrite,
+        cfg.data.hmi_sharp_series,
+        harp,
+        t0,
+        t1,
+        cfg.data.hmi_segments,
+        email=email,
+        out_dir=raw_root / f"sharp_{harp}",
+        overwrite=overwrite,
+        cadence_seconds=cfg.data.hmi_cadence_seconds,
     )
     stacks, hmi_maps, times = _load_hmi_stacks(sharp_files, cfg.data.hmi_segments)
     n_frames = len(hmi_maps)
-    log.info("HMI timeline: %d frames, %s .. %s, patch %s",
-             n_frames, times["time_utc"].iloc[0], times["time_utc"].iloc[-1],
-             stacks[f"hmi_{cfg.data.hmi_segments[0]}"].shape[1:])
+    log.info(
+        "HMI timeline: %d frames, %s .. %s, patch %s",
+        n_frames,
+        times["time_utc"].iloc[0],
+        times["time_utc"].iloc[-1],
+        stacks[f"hmi_{cfg.data.hmi_segments[0]}"].shape[1:],
+    )
     for seg in cfg.data.hmi_segments:
         arr = stacks[f"hmi_{seg}"]
         for i in range(n_frames):
             quality = hmi_maps[i].meta.get("quality", 0) if seg == cfg.data.hmi_segments[0] else 0
-            qa_rows.append({
-                "frame_idx": i, "channel": f"hmi_{seg}",
-                "time_utc": times["time_utc"].iloc[i], "dt_seconds": 0.0,
-                **frame_qa(arr[i], quality, cfg.qa.max_nan_fraction),
-            })
+            qa_rows.append(
+                {
+                    "frame_idx": i,
+                    "channel": f"hmi_{seg}",
+                    "time_utc": times["time_utc"].iloc[i],
+                    "dt_seconds": 0.0,
+                    **frame_qa(arr[i], quality, cfg.qa.max_nan_fraction),
+                }
+            )
 
     # --- AIA cutouts, reprojected per-frame onto the HMI CEA grid ---
     if not skip_aia:
@@ -170,56 +192,93 @@ def build_sample(
         for ch in channels:
             arr = np.full((n_frames, *target_shape), np.nan, dtype=np.float32)
             try:
-                files = fetch_aia_cutouts(
-                    ch, t0, t1, cfg.data.aia_cadence_seconds, bottom_left, top_right,
-                    email=email, out_dir=raw_root / f"aia_{ch:04d}",
-                    euv_series=cfg.data.aia_euv_series,
-                    uv_series=cfg.data.aia_uv_series,
-                    overwrite=overwrite,
+                files = fetch_with_retry(
+                    lambda ch=ch: fetch_aia_cutouts(
+                        ch,
+                        t0,
+                        t1,
+                        cfg.data.aia_cadence_seconds,
+                        bottom_left,
+                        top_right,
+                        email=email,
+                        out_dir=raw_root / f"aia_{ch:04d}",
+                        euv_series=cfg.data.aia_euv_series,
+                        uv_series=cfg.data.aia_uv_series,
+                        overwrite=overwrite,
+                    ),
+                    label=f"AIA {ch} A",
                 )
                 file_times = pd.Series([read_date_obs(f) for f in files])
                 matches = match_nearest(
                     times["time_utc"], file_times, cfg.data.aia_match_tolerance_seconds
                 )
                 for i, j in enumerate(matches):
-                    row = {"frame_idx": i, "channel": channel_key(ch),
-                           "time_utc": times["time_utc"].iloc[i]}
+                    row = {
+                        "frame_idx": i,
+                        "channel": channel_key(ch),
+                        "time_utc": times["time_utc"].iloc[i],
+                    }
                     if j < 0:
-                        qa_rows.append({**row, "dt_seconds": np.nan,
-                                        **frame_qa(arr[i], None, cfg.qa.max_nan_fraction),
-                                        "flagged": True})
+                        qa_rows.append(
+                            {
+                                **row,
+                                "dt_seconds": np.nan,
+                                **frame_qa(arr[i], None, cfg.qa.max_nan_fraction),
+                                "flagged": True,
+                            }
+                        )
                         continue
                     aia_map = sunpy.map.Map(str(files[j]))
                     normalized = exposure_normalize(aia_map)
                     normalized_map = sunpy.map.Map(normalized, aia_map.meta)
                     data, coverage = reproject_to_target(normalized_map, hmi_maps[i])
                     arr[i] = data[: target_shape[0], : target_shape[1]]
-                    dt = abs((file_times.iloc[j]
-                              - times["time_utc"].iloc[i]).total_seconds())
-                    qa_rows.append({**row, "dt_seconds": dt,
-                                    **frame_qa(arr[i], aia_map.meta.get("quality", 0),
-                                               cfg.qa.max_nan_fraction, coverage,
-                                               cfg.qa.min_coverage)})
-                log.info("AIA %d A: stacked %d/%d frames matched", ch,
-                         int((matches >= 0).sum()), n_frames)
+                    dt = abs((file_times.iloc[j] - times["time_utc"].iloc[i]).total_seconds())
+                    qa_rows.append(
+                        {
+                            **row,
+                            "dt_seconds": dt,
+                            **frame_qa(
+                                arr[i],
+                                aia_map.meta.get("quality", 0),
+                                cfg.qa.max_nan_fraction,
+                                coverage,
+                                cfg.qa.min_coverage,
+                            ),
+                        }
+                    )
+                log.info(
+                    "AIA %d A: stacked %d/%d frames matched",
+                    ch,
+                    int((matches >= 0).sum()),
+                    n_frames,
+                )
             except Exception as err:  # noqa: BLE001 - one channel must not kill a
                 # multi-hour fetch; store an all-NaN, fully flagged channel instead
                 log.error("AIA %d A failed (%s); storing all-NaN channel", ch, err)
                 for i in range(n_frames):
-                    qa_rows.append({"frame_idx": i, "channel": channel_key(ch),
-                                    "time_utc": times["time_utc"].iloc[i],
-                                    "dt_seconds": np.nan,
-                                    **frame_qa(arr[i], None, cfg.qa.max_nan_fraction),
-                                    "flagged": True})
+                    qa_rows.append(
+                        {
+                            "frame_idx": i,
+                            "channel": channel_key(ch),
+                            "time_utc": times["time_utc"].iloc[i],
+                            "dt_seconds": np.nan,
+                            **frame_qa(arr[i], None, cfg.qa.max_nan_fraction),
+                            "flagged": True,
+                        }
+                    )
             stacks[channel_key(ch)] = arr
 
     # --- GOES labels for this AR (catalog floor C1.0; >=M labeling in Phase D) ---
     events = fetch_goes_events(
-        t0 - timedelta(hours=24), t1 + timedelta(hours=24),
-        min_class=LABEL_CATALOG_MIN_CLASS, cache_dir=cfg.paths.cache_dir,
+        t0 - timedelta(hours=24),
+        t1 + timedelta(hours=24),
+        min_class=LABEL_CATALOG_MIN_CLASS,
+        cache_dir=cfg.paths.cache_dir,
     )
-    labels = select_ar_events(events, target.noaa, t0 - timedelta(hours=24),
-                              t1 + timedelta(hours=24))
+    labels = select_ar_events(
+        events, target.noaa, t0 - timedelta(hours=24), t1 + timedelta(hours=24)
+    )
     log.info("labels: %d GOES events attributed to NOAA %d", len(labels), target.noaa)
 
     meta = {

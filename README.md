@@ -86,9 +86,12 @@ via `solarflare resolve-harps`.
 `solarflare fetch` builds a per-AR sample under `data/cache/samples/<harpNNNNN_window>/`:
 
 - **HMI**: SHARP CEA cutouts (`hmi.sharp_cea_720s`, segments `magnetogram` +
-  `continuum`, 720 s) via a drms export — these define the timeline and the
-  target grid; the HARP patch tracks the AR (differential rotation handled).
-- **AIA**: 94/131/171/193/211/304/1600/1700 Å JSOC cutouts (12 min, rotation-
+  `continuum`) via a drms export — these define the timeline and the target
+  grid; the HARP patch tracks the AR (differential rotation handled). Fetched
+  hourly (`hmi_cadence_seconds: 3600`, `@3600s` prime-key slice); a reused raw
+  dir at the native 720 s is subsampled to hourly on load so a large patch
+  (AR 12192 is 800×1472 px) does not blow up memory.
+- **AIA**: 94/131/171/193/211/304/1600/1700 Å JSOC cutouts (hourly, rotation-
   tracked `im_patch`), exposure-normalized to DN/s and reprojected per frame
   onto the time-matched HMI CEA grid → all channels are pixel-aligned
   `(T, H, W)` float32 stacks (`*.npy`).
@@ -103,6 +106,15 @@ via `solarflare resolve-harps`.
 per-frame WCS reprojection, which performs the same rotation/plate-scale
 alignment for cutouts; CCD degradation correction is deferred until windows
 span years (single-AR windows are unaffected).
+
+**Fetch robustness** (the multi-window fetch is JSOC-network-bound, so the
+fetcher is built to survive a flaky link and resume): SHARP/AIA drms exports
+retry on JSOC's "1 pending export request" limit; the per-channel AIA fetch
+retries transient timeouts (WinError 10060, empty search results) with linear
+backoff before falling back to an all-NaN channel; HMI segments are aligned by
+exact `T_REC` and timestamps missing a segment are dropped (no silent
+mis-stacking); an empty HEK flare result is never cached. Completed raw FITS
+are reused, so an interrupted run resumes cheaply.
 
 **Gate G1 closed 2026-06-11**: one `fetch` command built the AR 11158 sample
 (2011-02-14 00:00 → 02-15 12:00, 181 frames, patch 377×744 px, 10 aligned
@@ -136,25 +148,36 @@ hash, metrics).
   verified live) — no hand-labeling, no image downloads.
 - **Segmentation** (`solarflare segment-sample`): threshold + morphology
   baseline (continuum < 0.85×quiet median OR |B_los| > 100 G) → per-frame AR
-  masks cached next to the sample (`ar_masks.npy`); U-Net is the stretch path.
+  masks cached next to the sample (`ar_masks.npy`). **U-Net** upgrade
+  (`solarflare train-unet`, segmentation-models-pytorch, ResNet-18 encoder) is
+  now the default (`segment.method: unet`): it distills the threshold masks as
+  pseudo-labels with a time-blocked per-sample split. Trained on AR 11158 it
+  reaches **val IoU 0.90**; on the unseen AR 11429 it agrees with the threshold
+  baseline at pooled IoU 0.91 (generalizes across ARs). Both methods write the
+  same files behind `segment_sample_auto`, so Phase C is unchanged.
 - **Tracking** (`solarflare track-window`): temporal IoU with Howard synodic
   differential-rotation compensation, time-based gap budget, HARP attachment.
   Oct 2014 multi-AR demo: 39 tracks / 338 boxes, **HARP purity 1.0 (zero ID
   switches)**, AR 12192 mean compensated IoU 0.946.
 - **Detection** (`build-detect-dataset` / `train-detect` / `eval-detect`):
-  YOLO11n fine-tuned on 143 rebinned 1024² full-disk magnetograms
-  (window-blocked splits, quiet-Sun negatives). Gate G2 numbers (conf 0.25,
-  match IoU 0.5):
+  **YOLO26n** (NMS-free end-to-end, Ultralytics 8.4; auto-downloaded, not
+  committed) fine-tuned on 143 rebinned 1024² full-disk magnetograms
+  (window-blocked splits, quiet-Sun negatives). Gate G2 vs the SHARP-derived
+  boxes (match IoU 0.5):
 
-  | split (held-out window) | recall | precision | matched IoU (mean/med) |
-  |---|---|---|---|
-  | val — Sep 2017 | 0.88 | 0.92 | 0.83 / 0.86 |
-  | test — May 2024 | 0.61 | 0.45 | 0.80 / 0.82 |
+  | split (held-out window) | conf | recall | precision | matched IoU (mean) |
+  |---|---|---|---|---|
+  | val — Sep 2017 | 0.25 | 0.59 | 0.84 | 0.85 |
+  | val — Sep 2017 | 0.10 | 0.80 | 0.67 | 0.83 |
+  | test — May 2024 | 0.25 | 0.44 | 0.66 | 0.84 |
+  | test — May 2024 | 0.10 | 0.54 | 0.45 | 0.83 |
 
-  Box quality is high wherever a match exists; the May-2024 deficit is
-  over-detection on an extreme ~10-AR disk (86 positive training frames —
-  add windows to improve). Cropping AIA remains HARP-first; the detector is
-  the no-SHARP generalization path.
+  Vs the earlier YOLO11n baseline (val R0.88/P0.92, test R0.61/P0.45): YOLO26n
+  produces **tighter boxes** (matched IoU 0.83–0.85 > 0.80–0.83) but lower
+  recall at the same confidence — its NMS-free head needs a lower `conf` to
+  recover recall, a known small-data symptom (143 training frames). Decision:
+  keep YOLO26n and re-train once more AR windows are fetched. Cropping AIA
+  remains HARP-first; the detector is the no-SHARP generalization path.
 
 ## Phase 3: features & labeled sequences
 
@@ -173,11 +196,15 @@ hash, metrics).
 - Gates: |Stonyhurst lon| ≤ 65° at t0 (HARP LON_FWT, interpolated);
   ≥80 % finite cells per window.
 
-**Gate G3 closed 2026-06-11** on the MVP sample: 14 sequences, 3 pos / 11 neg
-(rate 0.214), missing cells 0.19 % (sparse AIA 1700). Labels verified against
-the GOES record (positives exactly the three issuances preceding the X2.2).
-Single-AR for now — the builder is multi-AR; balance matures as Phase 1
-fetches more windows.
+**Gate G3 closed 2026-06-11**, extended 2026-06-13 to **two ARs**: `seq_v1` is
+now **135 sequences, 84 pos / 51 neg** (rate 0.62) over AR 11158 (X2.2) and
+AR 11429 (X5.4). HMI/AIA are fetched hourly (`hmi_cadence_seconds: 3600`,
+~5× lighter than the native 720 s; features resample to 60 min regardless).
+Missing cells 7.5 % — almost all AR 11429's AIA 1700 channel (~90 % NaN, a JSOC
+timeout during its fetch). Three more windows (Oct 2014 AR 12192, Sep 2017
+AR 12673, May 2024 AR 13664) have raw FITS staged on disk but are not yet
+cached — their fetch is JSOC-network-limited, not code-limited (see the fetch
+robustness notes below); re-run `scripts/build_real_dataset.py` to resume.
 
 ## Phase 4: forecasting (Gate G4 closed 2026-06-11)
 
@@ -204,9 +231,10 @@ climatology**, in the same band as published SWAN-SF/DeFN results. Lookback
 sweep (3/6/12 h): TSS 0.761/0.766/0.770. Known issue (visible in the
 reliability diagram): pos-weighted training inflates LSTM probabilities
 (negative BSS) — TSS is unaffected; calibration is Phase 5/E work.
-Run on our own MVP sequences via the same CLI (`forecast-benchmark --dataset
-data/datasets/seq_v1 --embargo-hours 2`); with n=14 those numbers are
-integration proof, not evidence.
+Run on our own sequences via the same CLI (`forecast-benchmark --dataset
+data/datasets/seq_v1 --embargo-hours 2`); with the current 2-AR set (n=135,
+but only 2 ARs / 2 disk passages) those numbers are integration proof, not
+evidence — the SWAN-SF results above are the real Phase-4 read.
 
 ## Phase 5: integration, evaluation & ablation (Gate G5 closed 2026-06-11)
 
@@ -224,8 +252,9 @@ integration proof, not evidence.
   bundled with their base feature) + optional drop-one retrains. On SWAN-SF
   (P3-trained, P4-evaluated) the ranking is physically sensible — magnetic
   shear & current-helicity parameters lead (MEANGAM, TOTUSJH, SHRGT45) — with
-  the correlated-features caveat documented. The same harness on the n=14
-  MVP dataset runs but yields no signal (reported as anecdotal, no conclusion).
+  the correlated-features caveat documented. The same harness on the small
+  2-AR own-data set runs but yields no signal (reported as anecdotal, no
+  conclusion until more AR windows are fetched).
 - Evaluation report with tables + figures: `reports/report_phase5.md`
   (regenerate via `uv run python scripts/build_report.py`).
 

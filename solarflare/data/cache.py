@@ -22,6 +22,11 @@ log = logging.getLogger(__name__)
 
 META_NAME = "meta.json"
 
+#: Derived per-sample products (not instrument channels). Excluded from
+#: SampleData.arrays so re-segmenting can overwrite them on Windows, where a
+#: live read-only mmap blocks writing the file.
+DERIVED_ARRAYS = frozenset({"ar_masks"})
+
 
 def channel_key(channel: int) -> str:
     return f"aia_{channel:04d}"
@@ -76,7 +81,9 @@ def load_sample(sample_dir: str | Path) -> SampleData:
         raise FileNotFoundError(f"not a sample cache (no {META_NAME}): {sample_dir}")
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     arrays = {
-        p.stem: np.load(p, mmap_mode="r") for p in sorted(sample_dir.glob("*.npy"))
+        p.stem: np.load(p, mmap_mode="r")
+        for p in sorted(sample_dir.glob("*.npy"))
+        if p.stem not in DERIVED_ARRAYS
     }
     times = pd.read_csv(sample_dir / "times.csv", parse_dates=["time_utc"])
 
