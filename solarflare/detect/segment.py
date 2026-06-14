@@ -5,8 +5,9 @@ Two masks per frame on the SHARP CEA patch:
   median is a robust quiet-Sun proxy because spots cover a small area fraction);
 - active mask:  |B_los| above a Gauss threshold.
 The AR mask (their union) is the boundary Phase C uses for max-intensity
-feature extraction. The trained U-Net upgrade (solarflare.detect.unet) sits
-behind the same interface; `segment_sample_auto` dispatches on cfg.method.
+feature extraction. This is the "threshold" `Segmenter`; the trained U-Net and
+the surya/sam2 stubs sit behind the same registry (solarflare.detect.segmenter),
+so `segment_sample_auto` dispatches on cfg.model.
 """
 
 from __future__ import annotations
@@ -109,12 +110,10 @@ def segment_sample(sample, cfg) -> tuple[Path, pd.DataFrame]:
 
 
 def segment_sample_auto(sample, cfg) -> tuple[Path, pd.DataFrame]:
-    """Dispatch on cfg.method: threshold baseline or trained U-Net (same outputs)."""
-    if cfg.method == "unet":
-        from solarflare.detect.unet import segment_sample_unet
+    """Segment via the `Segmenter` selected by cfg.model (registry; same outputs)."""
+    from solarflare.detect.segmenter import get_segmenter
 
-        return segment_sample_unet(sample, cfg)
-    return segment_sample(sample, cfg)
+    return get_segmenter(cfg).segment_sample(sample)
 
 
 def segmentation_qa_plot(

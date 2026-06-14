@@ -30,11 +30,14 @@ column-set may grow).
 ## `solarflare.detect`, `solarflare.track` — stage B
 - `bootstrap`: AR boxes from HARP keywords (Stonyhurst bounds), projection to
   full-disk pixels through the map WCS (handles CROTA2=180).
-- `segment`: threshold+morphology sunspot/active/AR masks; `segment_sample`
-  writes `ar_masks.npy` + areas + QA plot; `segment_sample_auto` dispatches
-  threshold vs U-Net on `segment.method`.
-- `unet`: U-Net upgrade (segmentation-models-pytorch) trained on the threshold
-  masks as pseudo-labels, time-blocked per-sample split (`train_unet`,
+- `segmenter`: pluggable `Segmenter` interface + registry (`get_segmenter`,
+  `available_segmenters`); `segment.model` ∈ `threshold | unet | surya | sam2`
+  resolves to a class. `surya`/`sam2` are stubs that raise with setup guidance.
+- `segment`: the "threshold" Segmenter — threshold+morphology sunspot/active/AR
+  masks; `segment_sample` writes `ar_masks.npy` + areas + QA plot;
+  `segment_sample_auto` dispatches via the registry on `segment.model`.
+- `unet`: the "unet" Segmenter (segmentation-models-pytorch) trained on the
+  threshold masks as pseudo-labels, time-blocked per-sample split (`train_unet`,
   `segment_sample_unet` — same output files as the baseline).
 - `dataset` / `yolo`: bounded rebinned full-disk YOLO dataset with
   window-blocked splits; Ultralytics (YOLO26n) fine-tune/predict/eval-vs-SHARP.
@@ -65,6 +68,15 @@ column-set may grow).
   (validation-only), reliability curve, `summarize`.
 - `viz.overlay`: sample QA overlay (magnetogram + reprojected AIA + B_los
   contours), flare-peak frame picker.
+- `viz.regionsummary`: **primary visualization** — operational NOAA SWPC-style
+  Solar Region Summary (gray magnetogram disk + risk-colored AR boxes + a
+  per-AR summary table: NOAA/HARP, Stonyhurst location, extent, `P(≥M, 24h)`
+  risk band). Frames + MP4 (`render-region-summary`).
+- `viz.dashboard`: legacy DeepFlareNet-style per-box probability dashboard
+  (`render-dashboard`); shares `build_probability_lookup` with regionsummary.
+- `viz.harpmap`: JSOC-style tracked-HARP full-disk map (`render-harpmap`).
+- `viz.video`: per-sample multi-wavelength panels + mask contours, browser-
+  playable H.264 MP4 (`Mp4Writer`, `render-video`).
 - `pipeline`: `run_all` (stages A→E, per-stage cache plan, manifest,
   reproducibility keys).
 

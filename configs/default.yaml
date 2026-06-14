@@ -99,7 +99,10 @@ detect:
   test_windows: [ar13664_may2024]
 
 segment:
-  method: unet               # threshold | unet (unet needs `solarflare train-unet` first)
+  # Pluggable Segmenter (solarflare.detect.segmenter registry); one-line swap.
+  #   threshold | unet | surya | sam2   (unet needs `solarflare train-unet` first;
+  #   surya/sam2 are stubs that raise with setup guidance -- need a GPU + weights).
+  model: unet
   spot_threshold: 0.85            # continuum < 0.85 x quiet-Sun median => sunspot
   bfield_threshold_gauss: 100     # |B_los| > 100 G => active pixel
   min_region_pixels: 64

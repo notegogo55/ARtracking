@@ -120,7 +120,7 @@ def run_all(
     record(
         "segment",
         t0,
-        method=cfg.segment.method,
+        model=cfg.segment.model,
         median_ar_pixels=int(np.median(masks.sum(axis=(1, 2)))),
     )
 

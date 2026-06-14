@@ -35,7 +35,8 @@ data/              (untracked) raw FITS, caches, datasets; data/weights/ = YOLO 
 outputs/           (untracked) experiment artifacts:
   logs/            run logs            figures/   one-off QA images
   forecast/        metric CSVs+plots   detect/    trained YOLO weights
-  dashboard/       prob-dashboard MP4  harpmap/   full-disk HARP-map MP4
+  region_summary/  SWPC-style MP4      harpmap/   full-disk HARP-map MP4
+  dashboard/       prob-dashboard MP4  (legacy DeFN-style per-box view)
   runs/            run-all manifests   tracks/    tracker outputs
 ```
 
@@ -146,15 +147,20 @@ hash, metrics).
 - **Bootstrap labels** (`solarflare bootstrap-boxes`): AR boxes from HARP
   metadata via keyword-only JSOC queries (Stonyhurst LON/LAT_MIN/MAX, semantics
   verified live) — no hand-labeling, no image downloads.
-- **Segmentation** (`solarflare segment-sample`): threshold + morphology
-  baseline (continuum < 0.85×quiet median OR |B_los| > 100 G) → per-frame AR
-  masks cached next to the sample (`ar_masks.npy`). **U-Net** upgrade
-  (`solarflare train-unet`, segmentation-models-pytorch, ResNet-18 encoder) is
-  now the default (`segment.method: unet`): it distills the threshold masks as
-  pseudo-labels with a time-blocked per-sample split. Trained on AR 11158 it
-  reaches **val IoU 0.90**; on the unseen AR 11429 it agrees with the threshold
-  baseline at pooled IoU 0.91 (generalizes across ARs). Both methods write the
-  same files behind `segment_sample_auto`, so Phase C is unchanged.
+- **Segmentation** (`solarflare segment-sample`): a pluggable `Segmenter`
+  (`solarflare/detect/segmenter.py` registry) chosen by **one config line** —
+  `segment.model: threshold | unet | surya | sam2`. `threshold` + morphology
+  (continuum < 0.85×quiet median OR |B_los| > 100 G) is the zero-ML smoke
+  baseline → per-frame AR masks cached next to the sample (`ar_masks.npy`).
+  **U-Net** (`solarflare train-unet`, segmentation-models-pytorch, ResNet-18
+  encoder) is the default (`segment.model: unet`): it distills the threshold
+  masks as pseudo-labels with a time-blocked per-sample split. Trained on
+  AR 11158 it reaches **val IoU 0.90**; on the unseen AR 11429 it agrees with
+  the threshold baseline at pooled IoU 0.91 (generalizes across ARs). `surya`
+  (NASA-IMPACT Surya `ar_segmentation`) and `sam2` (Meta SAM2 propagation) are
+  registered **stubs** that raise with setup guidance (need a GPU + weights).
+  Every implementation writes the same files behind `segment_sample_auto`, so
+  swapping the model never touches Phase C.
 - **Tracking** (`solarflare track-window`): temporal IoU with Howard synodic
   differential-rotation compensation, time-based gap budget, HARP attachment.
   Oct 2014 multi-AR demo: 39 tracks / 338 boxes, **HARP purity 1.0 (zero ID
@@ -258,6 +264,24 @@ evidence — the SWAN-SF results above are the real Phase-4 read.
 - Evaluation report with tables + figures: `reports/report_phase5.md`
   (regenerate via `uv run python scripts/build_report.py`).
 
+## Visualization: operational Solar Region Summary (primary view)
+
+`solarflare render-region-summary -w <window>` renders the headline
+visualization: a **NOAA SWPC-style Solar Region Summary** — a grayscale HMI
+full-disk magnetogram with each tracked AR boxed and color-coded by a four-level
+flare **risk** (Low / Moderate / High / Very-High), beside a region-summary
+**table** listing every region's NOAA/HARP id, Stonyhurst location (e.g.
+`N15W20`), heliographic extent and `P(≥M, 24h)` as a risk bar — PNG frames + an
+MP4 clip (`solarflare/viz/regionsummary.py`). The single calibrated ≥M
+probability per AR drives the risk band (no fabricated C/M/X numbers); the footer
+names the model + dataset so a clip is never read as an operational forecast.
+On AR 11158 (2011-02-15) the X2.2 region shows up as a red **Very-High** box.
+
+This replaces the earlier DeepFlareNet-style per-box dashboard
+(`render-dashboard`, still available) as the recommended view. `render-harpmap`
+(JSOC-style tracked-HARP map) and `render-video` (per-sample multi-wavelength
+panels) are unchanged. Swapping is a CLI choice, not a code change.
+
 ## Results dashboard (Streamlit)
 
 Everything the pipeline has produced — holdout metrics, ablation, the
@@ -270,7 +294,7 @@ uv run --group app streamlit run app/main.py
 
 Pages: overview (key TSS numbers + pipeline status) · forecast runs ·
 feature importance · AR viewer (scrub frames, export MP4) · video gallery
-(`render-dashboard` / `render-harpmap` / sample clips) · experiment log ·
+(`render-region-summary` / `render-harpmap` / `render-dashboard` / sample clips) · experiment log ·
 reports. The app only reads `outputs/`, `reports/` and `data/cache/` — pages
 degrade to a hint when an artifact has not been generated yet.
 

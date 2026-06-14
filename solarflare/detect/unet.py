@@ -236,7 +236,7 @@ def segment_sample_unet(
     if not weights_path.exists():
         raise FileNotFoundError(
             f"no U-Net weights at {weights_path} - run `solarflare train-unet` first "
-            "(or set segment.method: threshold)"
+            "(or set segment.model: threshold)"
         )
     model, ckpt = load_unet(weights_path, device=device)
     prob_threshold = float(ckpt.get("prob_threshold", cfg.unet_prob_threshold))
