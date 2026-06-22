@@ -129,9 +129,13 @@ features:
 
 forecast:
   lookback_hours: 24           # feature history fed to the model
-  lead_hours: 24               # forecast horizon; features end strictly before this window
-  flare_class_threshold: M1.0  # positive label: >= M1.0 within lead window
+  lead_hours: 24               # primary forecast horizon; features end strictly before this window
+  flare_class_threshold: M1.0  # primary positive label: >= M1.0 within lead window
   bin_hours: 24                # bin size for the climatological base rate
+  # Evaluation grid (M3): extra horizons/classes labeled + scored per cell (label_{H}h_{C}).
+  # Empty -> just the primary cell. Proposal grid = {24,72}h x {>=M,>=X}:
+  lead_hours_grid: []          # e.g. [24, 72]
+  flare_classes_grid: []       # e.g. [M1.0, X1.0]
 
 geometry:
   max_cm_longitude_deg: 65     # restrict ARs to +/-65 deg of central meridian

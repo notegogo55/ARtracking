@@ -49,7 +49,7 @@ The HMI mask is read on each AIA layer at increasing height/temperature:
 | A | `solarflare.data` | `jsoc_fetch`, `goes_events`, `harps`, `preprocess`, `cache`, `sample` | `fetch`, `qa-overlay`, `resolve-harps`, `check-credentials` |
 | B | `solarflare.detect`, `solarflare.track` | `bootstrap`, `segment`, `segmenter`, `unet`, `fulldisk`, `iou` | `bootstrap-boxes`, `segment-sample`, `train-unet`, `track-window`, `fetch-fulldisk` |
 | C | `solarflare.features` | `extract`, `dataset` | `build-features`, `build-dataset` |
-| D | `solarflare.forecast` | `baselines`, `lstm`, `validate`, `swansf`, `ablation` | `forecast-benchmark`, `forecast-holdout`, `forecast-sweep`, `ablate`, `swansf-prepare` |
+| D | `solarflare.forecast` | `baselines`, `lstm`, `validate`, `swansf`, `ablation` | `forecast-benchmark`, `forecast-grid`, `forecast-holdout`, `forecast-sweep`, `ablate`, `swansf-prepare` |
 | E | `solarflare.eval`, `solarflare.viz`, `solarflare.pipeline` | `metrics`, `overlay`, `pipeline` | `run-all`, `base-rate` |
 
 ## Load-bearing design decisions

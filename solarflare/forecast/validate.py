@@ -47,8 +47,13 @@ def time_blocked_folds(
     return folds
 
 
-def make_models(feature_names: list[str], horizon_steps: int, seed: int,
-                curves_dir: Path | None = None, lstm_overrides: dict | None = None) -> dict:
+def make_models(
+    feature_names: list[str],
+    horizon_steps: int,
+    seed: int,
+    curves_dir: Path | None = None,
+    lstm_overrides: dict | None = None,
+) -> dict:
     from solarflare.forecast.baselines import (
         ClimatologyForecaster,
         EnsembleForecaster,
@@ -60,24 +65,25 @@ def make_models(feature_names: list[str], horizon_steps: int, seed: int,
         if name == "climatology":
             return ClimatologyForecaster()
         if name == "holt_winters":
-            return HoltWintersForecaster(feature_names, horizon_steps=horizon_steps,
-                                         seed=seed)
+            return HoltWintersForecaster(feature_names, horizon_steps=horizon_steps, seed=seed)
         if name == "lstm":
             cfg = LSTMConfig(seed=seed, **(lstm_overrides or {}))
             return LSTMForecaster(cfg, curves_dir=curves_dir, name=name)
         if name == "ensemble":
             cfg = LSTMConfig(seed=seed, **(lstm_overrides or {}))
-            return EnsembleForecaster([
-                HoltWintersForecaster(feature_names, horizon_steps=horizon_steps,
-                                      seed=seed),
-                LSTMForecaster(cfg, curves_dir=curves_dir, name="ensemble_lstm"),
-            ])
+            return EnsembleForecaster(
+                [
+                    HoltWintersForecaster(feature_names, horizon_steps=horizon_steps, seed=seed),
+                    LSTMForecaster(cfg, curves_dir=curves_dir, name="ensemble_lstm"),
+                ]
+            )
         raise ValueError(f"unknown model {name!r}")
 
     from functools import partial
 
-    return {name: partial(fresh, name)
-            for name in ("climatology", "holt_winters", "lstm", "ensemble")}
+    return {
+        name: partial(fresh, name) for name in ("climatology", "holt_winters", "lstm", "ensemble")
+    }
 
 
 def fit_model(factory, X_tr, y_tr, X_val, y_val):
@@ -100,19 +106,24 @@ def fit_model(factory, X_tr, y_tr, X_val, y_val):
 
 
 def crossval_table(
-    X: np.ndarray, y: np.ndarray, t0s: pd.Series, feature_names: list[str],
-    horizon_steps: int, n_folds: int = 5, embargo_hours: float = 48.0,
-    seed: int = 1337, model_names: tuple[str, ...] = ("climatology", "holt_winters",
-                                                      "lstm", "ensemble"),
-    curves_dir: Path | None = None, lstm_overrides: dict | None = None,
+    X: np.ndarray,
+    y: np.ndarray,
+    t0s: pd.Series,
+    feature_names: list[str],
+    horizon_steps: int,
+    n_folds: int = 5,
+    embargo_hours: float = 48.0,
+    seed: int = 1337,
+    model_names: tuple[str, ...] = ("climatology", "holt_winters", "lstm", "ensemble"),
+    curves_dir: Path | None = None,
+    lstm_overrides: dict | None = None,
 ) -> tuple[pd.DataFrame, dict[str, tuple[np.ndarray, np.ndarray]]]:
     """Chronological k-fold CV.
 
     Returns (per-(model, fold) metric rows, out-of-fold {model: (y, p)} pairs
     concatenated across folds for reliability diagrams).
     """
-    factories = make_models(feature_names, horizon_steps, seed, curves_dir,
-                            lstm_overrides)
+    factories = make_models(feature_names, horizon_steps, seed, curves_dir, lstm_overrides)
     rows = []
     oof: dict[str, list] = {name: [] for name in model_names}
     folds = time_blocked_folds(t0s, n_folds, embargo_hours)
@@ -123,24 +134,28 @@ def crossval_table(
         cut = max(int(0.8 * len(tr_sorted)), 1)
         inner_tr, inner_va = tr_sorted[:cut], tr_sorted[cut:]
         if len(inner_va) == 0:
-            inner_va = inner_tr[-max(len(inner_tr) // 5, 1):]
+            inner_va = inner_tr[-max(len(inner_tr) // 5, 1) :]
         base_rate = float(np.mean(y[inner_tr]))
         for name in model_names:
-            fitted = fit_model(factories[name], X[inner_tr], y[inner_tr],
-                               X[inner_va], y[inner_va])
+            fitted = fit_model(factories[name], X[inner_tr], y[inner_tr], X[inner_va], y[inner_va])
             # operating threshold chosen on the inner val split, frozen for the fold
             thr, _ = best_tss_threshold(y[inner_va], fitted.predict_proba(X[inner_va]))
             p_fold = fitted.predict_proba(X[va])
-            row = {"model": name, "fold": k,
-                   **summarize(y[va], p_fold, thr, base_rate)}
+            row = {"model": name, "fold": k, **summarize(y[va], p_fold, thr, base_rate)}
             rows.append(row)
             oof[name].append((y[va], p_fold))
-            log.info("fold %d %s: tss=%.3f hss=%.3f bss=%.3f", k, name,
-                     row["tss"], row["hss"], row["bss"])
+            log.info(
+                "fold %d %s: tss=%.3f hss=%.3f bss=%.3f",
+                k,
+                name,
+                row["tss"],
+                row["hss"],
+                row["bss"],
+            )
     oof_concat = {
-        name: (np.concatenate([y_ for y_, _ in pairs]),
-               np.concatenate([p_ for _, p_ in pairs]))
-        for name, pairs in oof.items() if pairs
+        name: (np.concatenate([y_ for y_, _ in pairs]), np.concatenate([p_ for _, p_ in pairs]))
+        for name, pairs in oof.items()
+        if pairs
     }
     return pd.DataFrame(rows), oof_concat
 
@@ -153,12 +168,86 @@ def aggregate_table(per_fold: pd.DataFrame) -> pd.DataFrame:
     return agg.sort_values("tss_mean", ascending=False).reset_index()
 
 
-def holdout_evaluate(
-    X_train: np.ndarray, y_train: np.ndarray, t0_train: pd.Series,
-    X_test: np.ndarray, y_test: np.ndarray, feature_names: list[str],
-    horizon_steps: int, seed: int = 1337,
+def grid_label_columns(samples: pd.DataFrame) -> list[tuple[str, float, str]]:
+    """Parse the `label_{H}h_{C}` evaluation-grid columns -> [(column, H, class)]."""
+    out: list[tuple[str, float, str]] = []
+    for col in samples.columns:
+        if not col.startswith("label_"):
+            continue
+        body = col[len("label_") :]
+        if "h_" not in body:
+            continue
+        h_str, cls = body.split("h_", 1)
+        try:
+            out.append((col, float(h_str), cls))
+        except ValueError:
+            continue
+    return sorted(out, key=lambda t: (t[1], t[2]))
+
+
+def crossval_grid(
+    X: np.ndarray,
+    samples: pd.DataFrame,
+    feature_names: list[str],
+    horizon_steps: int,
+    n_folds: int = 5,
+    embargo_hours: float = 48.0,
+    seed: int = 1337,
     model_names: tuple[str, ...] = ("climatology", "holt_winters", "lstm", "ensemble"),
-    curves_dir: Path | None = None, lstm_overrides: dict | None = None,
+    lstm_overrides: dict | None = None,
+) -> tuple[pd.DataFrame, dict[str, dict[str, tuple[np.ndarray, np.ndarray]]]]:
+    """Run `crossval_table` for every (horizon, class) cell in the dataset.
+
+    Cells come from the `label_{H}h_{C}` columns (falls back to the primary
+    `label` when none exist). Degenerate cells (a single class — e.g. >=X on a
+    thin own-data set) are skipped with a warning so the run never crashes.
+    Returns (combined per-cell aggregate table, {label_col: out-of-fold preds}).
+    """
+    t0s = pd.to_datetime(samples["t0"])
+    cells = grid_label_columns(samples) or [("label", float("nan"), "")]
+    tables, oof_by_cell = [], {}
+    for col, horizon, cls in cells:
+        y = samples[col].to_numpy(dtype=int)
+        if len(np.unique(y)) < 2:
+            log.warning("grid cell %s has a single class (n_pos=%d); skipped", col, int(y.sum()))
+            continue
+        per_fold, oof = crossval_table(
+            X,
+            y,
+            t0s,
+            feature_names,
+            horizon_steps=horizon_steps,
+            n_folds=n_folds,
+            embargo_hours=embargo_hours,
+            seed=seed,
+            model_names=model_names,
+            lstm_overrides=lstm_overrides,
+        )
+        if per_fold.empty:
+            continue
+        agg = aggregate_table(per_fold)
+        agg.insert(0, "class", cls)
+        agg.insert(0, "horizon_h", horizon)
+        agg.insert(0, "label_col", col)
+        agg.insert(0, "n_positive", int(y.sum()))
+        tables.append(agg)
+        oof_by_cell[col] = oof
+    combined = pd.concat(tables, ignore_index=True) if tables else pd.DataFrame()
+    return combined, oof_by_cell
+
+
+def holdout_evaluate(
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    t0_train: pd.Series,
+    X_test: np.ndarray,
+    y_test: np.ndarray,
+    feature_names: list[str],
+    horizon_steps: int,
+    seed: int = 1337,
+    model_names: tuple[str, ...] = ("climatology", "holt_winters", "lstm", "ensemble"),
+    curves_dir: Path | None = None,
+    lstm_overrides: dict | None = None,
 ) -> tuple[pd.DataFrame, dict[str, tuple[np.ndarray, np.ndarray]], dict]:
     """Train on one time block, evaluate ONCE on a held-out one.
 
@@ -166,18 +255,21 @@ def holdout_evaluate(
     early stopping and the operating threshold, frozen before touching test.
     Returns (metrics table, {model: (y_test, p_test)}, fitted models).
     """
-    factories = make_models(feature_names, horizon_steps, seed, curves_dir,
-                            lstm_overrides)
+    factories = make_models(feature_names, horizon_steps, seed, curves_dir, lstm_overrides)
     order = np.argsort(pd.to_datetime(t0_train).to_numpy(), kind="stable")
     cut = max(int(0.8 * len(order)), 1)
     inner_tr, inner_va = order[:cut], order[cut:]
     base_rate = float(np.mean(y_train[inner_tr]))
     rows, predictions, fitted_models = [], {}, {}
     for name in model_names:
-        fitted = fit_model(factories[name], X_train[inner_tr], y_train[inner_tr],
-                           X_train[inner_va], y_train[inner_va])
-        thr, _ = best_tss_threshold(
-            y_train[inner_va], fitted.predict_proba(X_train[inner_va]))
+        fitted = fit_model(
+            factories[name],
+            X_train[inner_tr],
+            y_train[inner_tr],
+            X_train[inner_va],
+            y_train[inner_va],
+        )
+        thr, _ = best_tss_threshold(y_train[inner_va], fitted.predict_proba(X_train[inner_va]))
         p_test = fitted.predict_proba(X_test)
         rows.append({"model": name, **summarize(y_test, p_test, thr, base_rate)})
         predictions[name] = (y_test, p_test)
@@ -187,9 +279,7 @@ def holdout_evaluate(
     return table, predictions, fitted_models
 
 
-def roc_plot(
-    results: dict[str, tuple[np.ndarray, np.ndarray]], out_path: str | Path
-) -> Path:
+def roc_plot(results: dict[str, tuple[np.ndarray, np.ndarray]], out_path: str | Path) -> Path:
     """ROC curves (with AUC) for {model: (y_true, p)}."""
     import matplotlib
 
@@ -216,7 +306,8 @@ def roc_plot(
 
 
 def reliability_plot(
-    results: dict[str, tuple[np.ndarray, np.ndarray]], out_path: str | Path,
+    results: dict[str, tuple[np.ndarray, np.ndarray]],
+    out_path: str | Path,
     n_bins: int = 10,
 ) -> Path:
     """Reliability diagram for {model: (y_true, p)} on one shared axis."""
@@ -226,7 +317,8 @@ def reliability_plot(
     import matplotlib.pyplot as plt
 
     fig, (ax, axh) = plt.subplots(
-        2, 1, figsize=(6, 7), height_ratios=[3, 1], constrained_layout=True)
+        2, 1, figsize=(6, 7), height_ratios=[3, 1], constrained_layout=True
+    )
     ax.plot([0, 1], [0, 1], "k--", lw=1, label="perfect")
     for name, (y, p) in results.items():
         centers, observed, counts = reliability_curve(y, p, n_bins)

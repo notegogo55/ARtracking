@@ -253,6 +253,14 @@ data/datasets/seq_v1 --embargo-hours 2`); with the current 2-AR set (n=135,
 but only 2 ARs / 2 disk passages) those numbers are integration proof, not
 evidence — the SWAN-SF results above are the real Phase-4 read.
 
+**Multi-horizon × multi-class grid (24/72 h × ≥M/≥X).** Set
+`forecast.lead_hours_grid: [24, 72]` and `forecast.flare_classes_grid: [M1.0, X1.0]`;
+`build-dataset` then emits a leakage-safe `label_{H}h_{C}` column per cell (the
+primary `label` aliases the `lead_hours`×`flare_class_threshold` cell, so a scalar
+config reproduces the old result). `solarflare forecast-grid --dataset <ds>` scores
+TSS/HSS/BSS + a reliability diagram for every cell (degenerate single-class cells —
+e.g. ≥X on the thin own-data set — are skipped with a warning).
+
 ## Phase 5: integration, evaluation & ablation (Gate G5 closed 2026-06-11)
 
 - **One command end-to-end**: `solarflare run-all -w ar11158_feb2011` chains

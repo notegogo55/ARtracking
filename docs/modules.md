@@ -54,8 +54,9 @@ column-set may grow).
   right-edge-labeled `resample_features`, backward `add_gradients`,
   `build_frame_pipeline` (the leak-safe chain).
 - `dataset`: `build_sequences` (sliding windows ≤ t0, longitude gate,
-  validity filter, strict label boundaries), `write_dataset` (npz + parquet +
-  data dictionary + stats).
+  validity filter, strict label boundaries; emits per-cell `label_{H}h_{C}` for
+  the `lead_grid`×`class_grid`), `write_dataset` (npz + parquet + data dictionary
+  + stats incl. per-cell positive counts).
 
 ## `solarflare.forecast` — stage D
 - `baselines`: `ClimatologyForecaster`, `HoltWintersForecaster` (Holt trend +
@@ -63,8 +64,8 @@ column-set may grow).
 - `lstm`: `LSTMForecaster` (pos-weighted BCE, early stop on val TSS,
   train-only standardization, training-curve artifacts).
 - `validate`: `time_blocked_folds` (chronological + embargo),
-  `crossval_table`, `holdout_evaluate` (frozen thresholds), reliability/ROC
-  plots, `aggregate_table`.
+  `crossval_table`, `crossval_grid` (per {horizon×class} cell) + `grid_label_columns`,
+  `holdout_evaluate` (frozen thresholds), reliability/ROC plots, `aggregate_table`.
 - `swansf`: streaming SWAN-SF adapter (see reproducibility gotchas).
 - `ablation`: grouped permutation importance + drop-one retrain.
 

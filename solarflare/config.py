@@ -113,9 +113,14 @@ class FeaturesConfig(_StrictModel):
 
 class ForecastConfig(_StrictModel):
     lookback_hours: float = Field(default=24, gt=0)
-    lead_hours: float = Field(default=24, gt=0)
-    flare_class_threshold: str = "M1.0"
+    lead_hours: float = Field(default=24, gt=0)  # primary horizon
+    flare_class_threshold: str = "M1.0"  # primary class threshold
     bin_hours: float = Field(default=24, gt=0)
+    # Evaluation grid (M3): extra horizons/classes for multi-cell labeling + metrics.
+    # Empty -> just the primary (lead_hours x flare_class_threshold). Example for the
+    # proposal's {24,72}h x {>=M,>=X}:  lead_hours_grid: [24, 72]; flare_classes_grid: [M1.0, X1.0]
+    lead_hours_grid: list[float] = Field(default_factory=list)
+    flare_classes_grid: list[str] = Field(default_factory=list)
 
     @field_validator("flare_class_threshold")
     @classmethod
@@ -124,6 +129,32 @@ class ForecastConfig(_StrictModel):
 
         goes_class_to_flux(v)  # raises ValueError if malformed
         return v
+
+    @field_validator("lead_hours_grid")
+    @classmethod
+    def _leads_positive(cls, v: list[float]) -> list[float]:
+        if any(h <= 0 for h in v):
+            raise ValueError("lead_hours_grid entries must be > 0")
+        return v
+
+    @field_validator("flare_classes_grid")
+    @classmethod
+    def _grid_classes_parse(cls, v: list[str]) -> list[str]:
+        from solarflare.data.goes_events import goes_class_to_flux
+
+        for c in v:
+            goes_class_to_flux(c)  # raises ValueError if malformed
+        return v
+
+    @property
+    def lead_grid(self) -> list[float]:
+        """Horizons to label/evaluate (defaults to the primary lead_hours)."""
+        return self.lead_hours_grid or [self.lead_hours]
+
+    @property
+    def class_grid(self) -> list[str]:
+        """Class thresholds to label/evaluate (defaults to the primary threshold)."""
+        return self.flare_classes_grid or [self.flare_class_threshold]
 
 
 class DetectConfig(_StrictModel):

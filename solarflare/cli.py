@@ -582,6 +582,8 @@ def build_dataset(
             lon_series=lon_series,
             max_lon_deg=cfg.geometry.max_cm_longitude_deg,
             min_valid_fraction=cfg.features.min_valid_fraction,
+            lead_grid=cfg.forecast.lead_grid,
+            class_grid=cfg.forecast.class_grid,
         )
         typer.echo(
             f"{sdir.name}: {len(rows)} sequences "
@@ -607,6 +609,8 @@ def build_dataset(
             "lookback_steps": lookback_steps,
             "lead_hours": cfg.forecast.lead_hours,
             "flare_class_threshold": cfg.forecast.flare_class_threshold,
+            "lead_grid": cfg.forecast.lead_grid,
+            "class_grid": cfg.forecast.class_grid,
             "max_cm_longitude_deg": cfg.geometry.max_cm_longitude_deg,
             "min_valid_fraction": cfg.features.min_valid_fraction,
             "config_hash": cfg.short_hash(),
@@ -739,6 +743,80 @@ def forecast_benchmark(
                 "lookback_steps": lookback_steps or X.shape[1],
                 "tss_mean": round(float(row["tss_mean"]), 4),
                 "tss_std": round(float(row.get("tss_std", np.nan)), 4),
+                "hss_mean": round(float(row["hss_mean"]), 4),
+                "bss_mean": round(float(row["bss_mean"]), 4),
+                "config_hash": cfg.short_hash(),
+            },
+        )
+
+
+@app.command("forecast-grid")
+def forecast_grid(
+    dataset: Annotated[
+        Path, typer.Option(exists=True, file_okay=False, help="Dir with X.npz + samples.parquet")
+    ],
+    config: ConfigOpt = DEFAULT_CONFIG,
+    models: Annotated[
+        str, typer.Option(help="Comma list: climatology,holt_winters,lstm,ensemble")
+    ] = "climatology,holt_winters,lstm,ensemble",
+    folds: Annotated[int, typer.Option()] = 5,
+    max_epochs: Annotated[int | None, typer.Option(help="Override LSTM epochs")] = None,
+    embargo_hours: Annotated[
+        float | None, typer.Option(help="Override split.embargo_hours")
+    ] = None,
+    out: Annotated[Path | None, typer.Option(help="Output dir")] = None,
+    tag: Annotated[str, typer.Option(help="Run tag for outputs/experiment log")] = "grid",
+) -> None:
+    """M3: TSS/HSS/BSS for every {horizon x class} cell (label_{H}h_{C}) + per-cell reliability."""
+    import numpy as np
+    import pandas as pd
+
+    from solarflare.forecast.validate import crossval_grid, reliability_plot
+
+    cfg = _load(config)
+    data = np.load(dataset / "X.npz", allow_pickle=False)
+    X = data["X"]
+    feature_names = [str(n) for n in data["feature_names"]]
+    samples = pd.read_parquet(dataset / "samples.parquet")
+    out_dir = out or Path(cfg.paths.outputs_dir) / "forecast" / tag
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    table, oof_by_cell = crossval_grid(
+        X,
+        samples,
+        feature_names,
+        horizon_steps=X.shape[1],
+        n_folds=folds,
+        embargo_hours=(embargo_hours if embargo_hours is not None else cfg.split.embargo_hours),
+        seed=cfg.project.seed,
+        model_names=tuple(m.strip() for m in models.split(",")),
+        lstm_overrides={"max_epochs": max_epochs} if max_epochs else None,
+    )
+    if table.empty:
+        typer.secho(
+            "no usable grid cells (each had a single class, or embargo wiped the folds)", fg="red"
+        )
+        raise typer.Exit(code=1)
+    table.to_csv(out_dir / "grid_metrics.csv", index=False)
+    for col, oof in oof_by_cell.items():
+        reliability_plot(oof, out_dir / f"reliability_{col}.png")
+
+    show = ["label_col", "n_positive", "model", "tss_mean", "hss_mean", "bss_mean"]
+    typer.echo(table[show].round(4).to_string(index=False))
+    typer.echo(f"outputs: {out_dir}")
+    for _, row in table.iterrows():
+        append_experiment_row(
+            cfg.paths.experiment_log,
+            {
+                "phase": "P4",
+                "experiment": f"forecast_grid_{tag}",
+                "label_col": row["label_col"],
+                "horizon_h": row["horizon_h"],
+                "class": row["class"],
+                "n_positive": int(row["n_positive"]),
+                "model": row["model"],
+                "dataset": str(dataset),
+                "tss_mean": round(float(row["tss_mean"]), 4),
                 "hss_mean": round(float(row["hss_mean"]), 4),
                 "bss_mean": round(float(row["bss_mean"]), 4),
                 "config_hash": cfg.short_hash(),

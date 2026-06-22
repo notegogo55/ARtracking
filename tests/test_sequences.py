@@ -14,10 +14,17 @@ NOAA = 90001
 
 
 def _events(peak: str, goes_class: str = "M5.0", noaa: int = NOAA) -> pd.DataFrame:
-    return pd.DataFrame([{
-        "start_time": peak, "peak_time": peak, "end_time": peak,
-        "goes_class": goes_class, "noaa_ar": noaa,
-    }])
+    return pd.DataFrame(
+        [
+            {
+                "start_time": peak,
+                "peak_time": peak,
+                "end_time": peak,
+                "goes_class": goes_class,
+                "noaa_ar": noaa,
+            }
+        ]
+    )
 
 
 class TestLabelBoundaries:
@@ -41,7 +48,8 @@ class TestLabelBoundaries:
 
     def test_sub_threshold_event_negative_but_recorded(self):
         label, biggest = label_for_issuance(
-            _events("2099-01-02 13:00", goes_class="C9.9"), NOAA, self.T0, 24.0)
+            _events("2099-01-02 13:00", goes_class="C9.9"), NOAA, self.T0, 24.0
+        )
         assert label == 0 and biggest == "C9.9"
 
     def test_other_ar_event_ignored(self):
@@ -52,19 +60,25 @@ def _frame_features(n_hours: int = 60) -> pd.DataFrame:
     """Synthetic 12-min frame features over n_hours."""
     times = pd.date_range("2099-01-01 00:12", periods=n_hours * 5, freq="12min")
     rng = np.random.default_rng(1)
-    return pd.DataFrame({
-        "time": times,
-        "aia_0171_max": 100 + rng.random(len(times)),
-        "flux_total": np.linspace(1e3, 2e3, len(times)),
-    })
+    return pd.DataFrame(
+        {
+            "time": times,
+            "aia_0171_max": 100 + rng.random(len(times)),
+            "flux_total": np.linspace(1e3, 2e3, len(times)),
+        }
+    )
 
 
 def _build(frame_df, events=None, **kw):
     features = build_frame_pipeline(frame_df, 60)
     defaults = dict(
         events=events if events is not None else pd.DataFrame(),
-        noaa=NOAA, harp=11, window_name="w1",
-        lookback_steps=24, lead_hours=24.0, min_valid_fraction=0.5,
+        noaa=NOAA,
+        harp=11,
+        window_name="w1",
+        lookback_steps=24,
+        lead_hours=24.0,
+        min_valid_fraction=0.5,
     )
     defaults.update(kw)
     return build_sequences(features, **defaults)
@@ -114,8 +128,7 @@ class TestGates:
         features = build_frame_pipeline(frame_df, 60)
         t = pd.to_datetime(features["time"])
         # AR crosses 65 deg halfway through
-        lon = pd.Series(
-            np.linspace(40, 90, len(features)), index=t)
+        lon = pd.Series(np.linspace(40, 90, len(features)), index=t)
         X, rows, _ = _build(frame_df, lon_series=lon, max_lon_deg=65.0)
         assert len(rows) > 0
         assert (rows["lon_t0_deg"].abs() <= 65.0).all()
@@ -125,7 +138,7 @@ class TestGates:
 
     def test_min_valid_fraction_drops_gappy_windows(self):
         frame_df = _frame_features()
-        frame_df.loc[40:200, "aia_0171_max"] = np.nan   # big hole
+        frame_df.loc[40:200, "aia_0171_max"] = np.nan  # big hole
         X_strict, rows_strict, _ = _build(frame_df, min_valid_fraction=0.95)
         X_loose, rows_loose, _ = _build(frame_df, min_valid_fraction=0.3)
         assert len(rows_strict) < len(rows_loose)
@@ -139,6 +152,59 @@ class TestGates:
         for t0, label in labeled.items():
             expected = int(t0 < peak <= t0 + pd.Timedelta(hours=24))
             assert label == expected, t0
+
+
+class TestEvaluationGrid:
+    """M3: per-cell labels label_{H}h_{C} for the {24,72}h x {>=M,>=X} grid."""
+
+    def test_grid_labels_match_definition(self):
+        from solarflare.data.goes_events import goes_class_to_flux
+
+        events = pd.concat(
+            [_events("2099-01-02 06:00", "C5.0"), _events("2099-01-03 12:00", "M5.0")],
+            ignore_index=True,
+        )
+        _, rows, _ = _build(
+            _frame_features(n_hours=96),
+            events=events,
+            lead_grid=[24.0, 72.0],
+            class_grid=["M1.0", "X1.0"],
+        )
+        cols = {"label_24h_M1.0", "label_72h_M1.0", "label_24h_X1.0", "label_72h_X1.0"}
+        assert cols <= set(rows.columns)
+        peaks = pd.to_datetime(events["peak_time"])
+        fluxes = events["goes_class"].map(goes_class_to_flux)
+        for _, r in rows.iterrows():
+            t0 = r["t0"]
+            for h in (24.0, 72.0):
+                in_win = (peaks > t0) & (peaks <= t0 + pd.Timedelta(hours=h))
+                peak_flux = fluxes[in_win].max() if in_win.any() else 0.0
+                for c in ("M1.0", "X1.0"):
+                    expect = int(peak_flux >= goes_class_to_flux(c))
+                    assert r[f"label_{h:g}h_{c}"] == expect, (t0, h, c)
+        # the primary `label` aliases the (lead_hours=24, M1.0) cell
+        assert (rows["label"] == rows["label_24h_M1.0"]).all()
+
+    def test_default_grid_is_primary_only(self):
+        """Scalar config (no grid) => the only grid column aliases `label`."""
+        _, rows, _ = _build(_frame_features(), events=_events("2099-01-02 06:30"))
+        grid = [c for c in rows.columns if c.startswith("label_")]
+        assert grid == ["label_24h_M1.0"]
+        assert (rows["label"] == rows["label_24h_M1.0"]).all()
+
+    def test_poisoning_future_changes_no_cell(self):
+        """The leakage guard is label-independent: X is identical for every cell."""
+        frame_df = _frame_features()
+        events = _events("2099-01-02 06:30", "M5.0")
+        X_clean, rows, _ = _build(frame_df, events=events, lead_grid=[24.0, 72.0])
+        t0 = rows["t0"].iloc[3]
+        poisoned = frame_df.copy()
+        future = pd.to_datetime(poisoned["time"]) > t0
+        poisoned.loc[future, ["aia_0171_max", "flux_total"]] *= 1000.0
+        X_pois, rows_p, _ = _build(poisoned, events=events, lead_grid=[24.0, 72.0])
+        i = rows.index[rows["t0"] == t0][0]
+        j = rows_p.index[rows_p["t0"] == t0][0]
+        np.testing.assert_array_equal(X_clean[i], X_pois[j])
 
 
 def test_write_dataset_round_trip(tmp_path):

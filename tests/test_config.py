@@ -44,6 +44,28 @@ def test_minimal_config_gets_defaults():
     assert cfg.data.hmi_sharp_series == "hmi.sharp_cea_720s"
 
 
+def test_forecast_grid_accessors_default_to_primary():
+    cfg = Config.model_validate(_minimal_raw())
+    # empty grids -> just the primary cell
+    assert cfg.forecast.lead_grid == [cfg.forecast.lead_hours]
+    assert cfg.forecast.class_grid == [cfg.forecast.flare_class_threshold]
+
+
+def test_forecast_grid_accepts_lists():
+    raw = _minimal_raw()
+    raw["forecast"] = {"lead_hours_grid": [24, 72], "flare_classes_grid": ["M1.0", "X1.0"]}
+    cfg = Config.model_validate(raw)
+    assert cfg.forecast.lead_grid == [24, 72]
+    assert cfg.forecast.class_grid == ["M1.0", "X1.0"]
+
+
+def test_forecast_grid_rejects_bad_class():
+    raw = _minimal_raw()
+    raw["forecast"] = {"flare_classes_grid": ["M1.0", "Z9.9"]}
+    with pytest.raises(ValidationError):
+        Config.model_validate(raw)
+
+
 def test_rejects_unknown_keys():
     raw = _minimal_raw()
     raw["forecsat"] = {"lead_hours": 24}  # typo must fail loudly
