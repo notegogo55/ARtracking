@@ -32,13 +32,18 @@ column-set may grow).
   full-disk pixels through the map WCS (handles CROTA2=180).
 - `segmenter`: pluggable `Segmenter` interface + registry (`get_segmenter`,
   `available_segmenters`); `segment.model` ∈ `threshold | unet | surya | sam2`
-  resolves to a class. `surya`/`sam2` are stubs that raise with setup guidance.
+  resolves to a class. All four write the same `ar_masks.npy` + `ar_mask_areas.csv`.
 - `segment`: the "threshold" Segmenter — threshold+morphology sunspot/active/AR
   masks; `segment_sample` writes `ar_masks.npy` + areas + QA plot;
   `segment_sample_auto` dispatches via the registry on `segment.model`.
 - `unet`: the "unet" Segmenter (segmentation-models-pytorch) trained on the
   threshold masks as pseudo-labels, time-blocked per-sample split (`train_unet`,
   `segment_sample_unet` — same output files as the baseline).
+- `foundation`: the GPU-gated `surya` and `sam2` Segmenters. Surya runs its
+  `ar_segmentation` head (decode/write path testable via an injected `backbone`);
+  SAM2 seeds frame 0 with the HMI mask bbox and propagates the mask across frames
+  (`segment_sample_surya`, `segment_sample_sam2`). Each loader checks CUDA + the
+  model package + weights and falls back with setup guidance when absent.
 - `fulldisk`: bounded JSOC-rebinned (4096→1024) full-disk magnetogram export
   per window (`fetch_fulldisk_frames`), cached for the full-disk overlays.
 - `track.iou`: rotation-compensated temporal-IoU tracker (`track_boxes`),

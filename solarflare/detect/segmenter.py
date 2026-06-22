@@ -8,10 +8,12 @@ Implementations (registered by their `name`):
     training -- the smoke baseline that brings the whole pipeline up.
   - "unet":      segmentation-models-pytorch U-Net distilled from the threshold
     masks (the dependable trained baseline; `solarflare train-unet` first).
-  - "surya":     NASA-IMPACT Surya `ar_segmentation` head. STUB -- raises with
-    setup guidance (needs a CUDA GPU + HuggingFace weights).
-  - "sam2":      Meta Segment Anything 2 mask propagation. STUB -- raises with
-    setup guidance (needs a GPU + a SAM2 checkpoint).
+  - "surya":     NASA-IMPACT Surya `ar_segmentation` head (solarflare.detect.
+    foundation). GPU-gated: runs on a GPU box with weights, else falls back with
+    setup guidance. Decode/write path is offline-testable via a `backbone` arg.
+  - "sam2":      Meta Segment Anything 2 temporal mask propagation (foundation).
+    Seeds frame 0 with the HMI mask bbox, propagates across frames. GPU-gated
+    with the same honest fallback.
 
 Adding a model = adding a `Segmenter` subclass with a `name`, not editing the
 pipeline. Swap with `segment.model: threshold | unet | surya | sam2` -- one line.
@@ -108,37 +110,23 @@ class UNetSegmenter(Segmenter):
 
 @register_segmenter
 class SuryaSegmenter(Segmenter):
-    """NASA-IMPACT Surya `ar_segmentation` head -- not wired up in this offline build."""
+    """NASA-IMPACT Surya `ar_segmentation` head (GPU-gated; falls back with guidance)."""
 
     name = "surya"
 
     def segment_sample(self, sample) -> tuple[Path, pd.DataFrame]:
-        raise NotImplementedError(
-            "segment.model='surya' is a stub in this offline build. To enable it:\n"
-            "  1. install Surya (github.com/NASA-IMPACT/Surya);\n"
-            "  2. fetch the Surya-1.0 weights from HuggingFace "
-            "(nasa-ibm-ai4science/Surya-1.0);\n"
-            "  3. fine-tune downstream_examples/ar_segmentation "
-            "(download_data.sh + finetune.py via torchrun, LoRA);\n"
-            "  4. implement SuryaSegmenter.segment_sample to run inference and write "
-            "ar_masks.npy + ar_mask_areas.csv (the ThresholdSegmenter contract).\n"
-            "Needs a CUDA GPU. Until then use segment.model: unet (or threshold)."
-        )
+        from solarflare.detect.foundation import segment_sample_surya
+
+        return segment_sample_surya(sample, self.cfg)
 
 
 @register_segmenter
 class SAM2Segmenter(Segmenter):
-    """Meta Segment Anything 2 mask propagation -- not wired up in this offline build."""
+    """Meta Segment Anything 2 temporal mask propagation (GPU-gated; falls back)."""
 
     name = "sam2"
 
     def segment_sample(self, sample) -> tuple[Path, pd.DataFrame]:
-        raise NotImplementedError(
-            "segment.model='sam2' is a stub in this offline build. To enable it:\n"
-            "  1. install SAM2 (github.com/facebookresearch/sam2) + a SAM2 checkpoint;\n"
-            "  2. implement SAM2Segmenter.segment_sample to propagate AR masks across "
-            "frames (seed the prompts with HARP boxes or U-Net masks) and write "
-            "ar_masks.npy + ar_mask_areas.csv (the ThresholdSegmenter contract).\n"
-            "Best suited to the Phase-3 video/tracking propagation; needs a GPU. "
-            "Until then use segment.model: unet (or threshold)."
-        )
+        from solarflare.detect.foundation import segment_sample_sam2
+
+        return segment_sample_sam2(sample, self.cfg)

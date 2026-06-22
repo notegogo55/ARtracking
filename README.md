@@ -179,6 +179,23 @@ hash, metrics).
   `data/raw/fulldisk/<window>/`. The operational full-disk views overlay the
   tracked HARP boxes on these frames.
 
+**Foundation-model segmenters (GPU, optional).** `segment.model: surya` and
+`segment.model: sam2` (`solarflare/detect/foundation.py`) plug into the same
+contract, GPU-gated so the offline `unet`/`threshold` path never breaks:
+
+- **SAM2** (`facebookresearch/sam2`): seeds frame 0 with the HMI mask bbox (the
+  magnetic root) and propagates it across frames. On a GPU box: `pip install` SAM2,
+  set `segment.foundation_device: cuda` (default), optionally a local
+  `sam2_checkpoint` + `sam2_model_cfg` (else `from_pretrained(sam2_hf_id)`).
+- **Surya** (`NASA-IMPACT/Surya`, `ar_segmentation`): its downstream ships a
+  full-disk `infer.py` (13-channel 4096²), so the loader exposes a `backbone`
+  injection point and points at `infer.py` + the fine-tuned weights
+  (`segment.surya_weights`) rather than guessing a per-cutout API.
+
+Without a CUDA GPU / weights / the package, each raises a one-line setup-guidance
+message; swapping back to `unet` is one config line. The decode→`ar_masks.npy`
+write path is unit-tested offline (`tests/test_foundation.py`) via a fake backbone.
+
 ## Phase 3: features & labeled sequences
 
 `solarflare build-features` + `solarflare build-dataset` produce

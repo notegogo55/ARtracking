@@ -111,6 +111,13 @@ segment:
   unet_val_fraction: 0.2
   unet_prob_threshold: 0.5
   unet_weights: outputs/segment/unet/unet_best.pt
+  # Foundation segmenters (model: surya | sam2) — GPU-gated, fall back with guidance.
+  foundation_device: cuda                 # "cpu" forces a very slow CPU run
+  foundation_prob_threshold: 0.5
+  surya_weights: data/weights/surya/ar_segmentation_weights.pth
+  sam2_hf_id: facebook/sam2-hiera-large
+  # sam2_checkpoint: data/weights/sam2/sam2.1_hiera_large.pt   # local .pt (else from_pretrained)
+  # sam2_model_cfg: configs/sam2.1/sam2.1_hiera_l.yaml         # local cfg (else from_pretrained)
 
 track:
   iou_threshold: 0.2              # min rotation-compensated IoU to link boxes

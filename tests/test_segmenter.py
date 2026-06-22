@@ -42,7 +42,12 @@ def test_unknown_model_rejected_by_schema():
 
 
 @pytest.mark.parametrize("model", ["surya", "sam2"])
-def test_stub_segmenters_raise_with_guidance(model):
+def test_foundation_segmenters_fall_back_without_gpu(model, monkeypatch):
+    """surya/sam2 are GPU-gated: with no CUDA they raise actionable guidance,
+    deterministically (monkeypatched so the result is host-independent)."""
+    from solarflare.detect import foundation
+
+    monkeypatch.setattr(foundation, "cuda_available", lambda: False)
     seg = get_segmenter(SegmentConfig(model=model))
     with pytest.raises(NotImplementedError, match="segment.model"):
         seg.segment_sample(sample=None)

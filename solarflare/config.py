@@ -170,6 +170,14 @@ class SegmentConfig(_StrictModel):
     unet_val_fraction: float = Field(default=0.2, gt=0, lt=1)  # tail frames of each sample
     unet_prob_threshold: float = Field(default=0.5, gt=0, lt=1)
     unet_weights: Path = Path("outputs/segment/unet/unet_best.pt")
+    # --- foundation segmenters (surya / sam2), used when model in {"surya","sam2"} ---
+    # GPU-gated: each loader raises clear setup guidance when CUDA/weights are absent.
+    foundation_device: str = "cuda"  # "cpu" forces a (very slow) CPU run
+    foundation_prob_threshold: float = Field(default=0.5, gt=0, lt=1)
+    surya_weights: Path = Path("data/weights/surya/ar_segmentation_weights.pth")
+    sam2_hf_id: str = "facebook/sam2-hiera-large"
+    sam2_checkpoint: Path | None = None  # local .pt (else from_pretrained(sam2_hf_id))
+    sam2_model_cfg: str | None = None  # local model cfg (else from_pretrained)
 
     @field_validator("unet_tile_px")
     @classmethod
