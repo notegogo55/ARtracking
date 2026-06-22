@@ -47,7 +47,6 @@ def list_videos() -> list[tuple[str, Path]]:
     """รวบรวมไฟล์ .mp4 ทั้งหมด (หมวด, path) จาก outputs/ และ sample cache"""
     groups = [
         ("Solar Region Summary (มุมมองปฏิบัติการแบบ NOAA SWPC)", OUTPUTS / "region_summary"),
-        ("YOLO26 detection (กล่อง AR บน full-disk magnetogram)", OUTPUTS / "detect"),
         ("Flare-probability dashboard (มุมมองแบบ DeFN — legacy)", OUTPUTS / "dashboard"),
         ("Tracked-AR full-disk map (มุมมองแบบ JSOC HARP)", OUTPUTS / "harpmap"),
         ("คลิป AR รายตัว + U-Net mask จาก sample cache", SAMPLES),

@@ -60,7 +60,7 @@ uv run ruff check .
 |---|---|---|---|
 | G0 baseline | `uv run solarflare base-rate` | 2014 ≥M base rate **0.3260** (119/365 bins) | ~1 min (then cached) |
 | G1 sample | `fetch` above, then `qa-overlay --sample-dir data/cache/samples/harp00377_ar11158_feb2011` | 10 aligned (181,377,744) stacks; labels M6.6/M2.2/X2.2; overlay aligns | ~3.5 h |
-| G2 detect/track | `segment-sample`, `track-window --window ar12192_oct2014`, `build-detect-dataset`, `train-detect`, `eval-detect --split val|test` | tracker HARP purity 1.0; val R 0.88 / P 0.92 / IoU 0.83; test R 0.61 / P 0.45 / IoU 0.80 | ~1.5 h DL + 0.5 h train |
+| G2 segment/track | `segment-sample`, `train-unet`, `track-window --window ar12192_oct2014`, `fetch-fulldisk -w <window>` | U-Net val IoU 0.90 (AR 11158), pooled IoU 0.91 on unseen AR 11429; tracker HARP purity 1.0, AR 12192 mean compensated IoU 0.946 | ~0.5 h train |
 | G3 dataset | `build-features`, `build-dataset` | 14 sequences, 3 pos, missing 0.19 % | ~1 min |
 | G4 forecast | `forecast-benchmark --dataset data/datasets/swansf_p3 --folds 3 --max-epochs 20` | LSTM TSS 0.770±0.030 > HW 0.758 > clim 0 | ~1 h CPU |
 | G5 holdout | `forecast-holdout --train-dataset .../swansf_p3 --test-dataset .../swansf_p4 --max-epochs 20 --horizon-steps 120` + `ablate ... --test-dataset .../swansf_p4` + `run-all -w ar11158_feb2011` ×2 | LSTM TSS 0.873 / AUC 0.979; shear/helicity params lead ablation; manifests equal | ~0.5 h CPU |

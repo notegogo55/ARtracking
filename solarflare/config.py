@@ -127,21 +127,18 @@ class ForecastConfig(_StrictModel):
 
 
 class DetectConfig(_StrictModel):
-    """Stage B detection: HARP-bootstrapped labels + YOLO fine-tuning."""
+    """Stage B: HARP-bootstrapped AR boxes + bounded full-disk frames.
+
+    `bootstrap_cadence_hours` sets the HARP-box query cadence (used by tracking,
+    the sequence builder, and the full-disk views). The `fulldisk_*` / `rebin_scale`
+    keys parameterize the bounded full-disk magnetogram export (`fetch-fulldisk`)
+    that the operational full-disk visualizations overlay HARP boxes onto.
+    """
 
     bootstrap_cadence_hours: int = Field(default=6, gt=0)
     fulldisk_series: str = "hmi.m_720s"
     fulldisk_segment: str = "magnetogram"
     rebin_scale: float = Field(default=0.25, gt=0, le=1)  # 4096 px -> 1024 px
-    image_clip_gauss: float = Field(default=300.0, gt=0)
-    min_box_arcsec: float = Field(default=20.0, ge=0)
-    yolo_model: str = "data/weights/yolo26n.pt"
-    yolo_imgsz: int = Field(default=640, gt=0)
-    yolo_epochs: int = Field(default=40, gt=0)
-    # Window-blocked splits (never random): names must reference study windows.
-    train_windows: list[str] = Field(default_factory=list)
-    val_windows: list[str] = Field(default_factory=list)
-    test_windows: list[str] = Field(default_factory=list)
 
 
 class SegmentConfig(_StrictModel):
@@ -231,17 +228,6 @@ class Config(_StrictModel):
     geometry: GeometryConfig = GeometryConfig()
     split: SplitConfig = SplitConfig()
     climatology: ClimatologyConfig
-
-    @model_validator(mode="after")
-    def _detect_splits_valid(self) -> Config:
-        names = {w.name for w in self.study.windows}
-        splits = self.detect.train_windows + self.detect.val_windows + self.detect.test_windows
-        unknown = set(splits) - names
-        if unknown:
-            raise ValueError(f"detect split windows not in study.windows: {sorted(unknown)}")
-        if len(splits) != len(set(splits)):
-            raise ValueError("detect train/val/test windows must be disjoint")
-        return self
 
     def short_hash(self) -> str:
         """Stable 8-char hash of the resolved config, for experiment logging."""

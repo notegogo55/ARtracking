@@ -8,7 +8,7 @@ __pycache__/
 
 # Data & outputs at repo root only (cached arrays, downloads, experiment artifacts);
 # patterns are anchored so the solarflare/data package stays tracked.
-# Pretrained weights (yolo26n.pt, ...) auto-download on first run — never commit them.
+# Pretrained weights (U-Net/Surya/SAM2) auto-download on first run — never commit them.
 /data/*
 !/data/.gitkeep
 /outputs/

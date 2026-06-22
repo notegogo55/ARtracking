@@ -35,9 +35,11 @@ and figures; prose marked `[expand]` is to be written. Numbers regenerate via
   the time-matched SHARP CEA WCS (differential rotation handled by HARP
   tracking + `im_patch` tracking). Validated by a synthetic blob-alignment
   test and the overlay above.
-- **Detection/segmentation/tracking**: HARP-bootstrapped boxes; YOLO11n
-  fine-tune on 143 rebinned full-disk magnetograms (window-blocked splits);
-  threshold+morphology AR masks; rotation-compensated temporal-IoU tracker.
+- **Segmentation/tracking**: each AR is segmented **once** on the HMI
+  magnetogram (threshold+morphology baseline; U-Net distilled from it as the
+  default, with GPU-gated Surya/SAM2 behind the same `Segmenter` contract); that
+  single HMI-rooted mask is propagated to every AIA layer downstream. HARP
+  geometry seeds tracking via a rotation-compensated temporal-IoU tracker.
 - **Features**: per-step max-in-mask AIA intensity per channel (not mean),
   unsigned/signed flux, peak |B|, area, backward gradients; hourly
   right-edge-labeled resampling.
@@ -49,7 +51,6 @@ and figures; prose marked `[expand]` is to be written. Numbers regenerate via
   chronological blocks with 48 h embargo, thresholds frozen on validation.
 
 ![Segmentation QA](figures/segment_qa_ar11158.png)
-![Detection dataset sanity check](figures/detect_dataset_sanity.png)
 
 ## 4. Results `[draft]`
 

@@ -46,8 +46,8 @@ stages = pd.DataFrame(
             "✅ เสร็จ (Gate G1)",
         ),
         (
-            "B — ตรวจจับ/ติดตาม",
-            "YOLO26n + threshold/U-Net mask + temporal-IoU tracker",
+            "B — แบ่งส่วน/ติดตาม",
+            "มาส์ก AR บน HMI (threshold/U-Net) + temporal-IoU tracker (มาส์กเดียวที่ propagate ขึ้นทุกชั้น)",
             "✅ เสร็จ (Gate G2)",
         ),
         ("C — ฟีเจอร์", "max-in-mask รายช่อง AIA, ฟลักซ์แม่เหล็ก, gradient ย้อนหลัง", "✅ เสร็จ"),

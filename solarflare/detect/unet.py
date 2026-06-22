@@ -21,7 +21,7 @@ from solarflare.detect.segment import ar_mask
 
 log = logging.getLogger(__name__)
 
-#: |B_los| input clip in Gauss (same scale as detect.image_clip_gauss for YOLO PNGs).
+#: |B_los| input clip in Gauss for the U-Net magnetogram channel.
 BLOS_CLIP_GAUSS = 300.0
 #: Encoder downsampling factor: U-Net input dims must be multiples of this.
 STRIDE = 32

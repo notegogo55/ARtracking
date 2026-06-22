@@ -39,8 +39,8 @@ column-set may grow).
 - `unet`: the "unet" Segmenter (segmentation-models-pytorch) trained on the
   threshold masks as pseudo-labels, time-blocked per-sample split (`train_unet`,
   `segment_sample_unet` — same output files as the baseline).
-- `dataset` / `yolo`: bounded rebinned full-disk YOLO dataset with
-  window-blocked splits; Ultralytics (YOLO26n) fine-tune/predict/eval-vs-SHARP.
+- `fulldisk`: bounded JSOC-rebinned (4096→1024) full-disk magnetogram export
+  per window (`fetch_fulldisk_frames`), cached for the full-disk overlays.
 - `track.iou`: rotation-compensated temporal-IoU tracker (`track_boxes`),
   time-based gap budget, majority-vote HARP attachment, `track_report`.
 

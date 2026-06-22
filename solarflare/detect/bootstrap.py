@@ -2,8 +2,8 @@
 
 A keyword-only JSOC query returns, for every HARP alive at each sample time, the
 patch's Stonyhurst longitude/latitude bounds (LON_MIN/LON_MAX/LAT_MIN/LAT_MAX,
-verified live 2026-06-11 against AR 11158's documented position). These boxes
-are the ground truth for YOLO training and the input/reference for tracking.
+verified live 2026-06-11 against AR 11158's documented position). These boxes are
+the reference for temporal tracking and the HARP overlay in the full-disk views.
 """
 
 from __future__ import annotations
@@ -22,8 +22,18 @@ HARP_BOX_KEYS = (
     "LON_MIN, LON_MAX, LAT_MIN, LAT_MAX, LON_FWT, LAT_FWT, OMEGA_DT"
 )
 
-BOX_COLUMNS = ["time", "harpnum", "noaa_ar", "lon_min", "lon_max", "lat_min", "lat_max",
-               "lon_fwt", "lat_fwt", "omega_dt"]
+BOX_COLUMNS = [
+    "time",
+    "harpnum",
+    "noaa_ar",
+    "lon_min",
+    "lon_max",
+    "lat_min",
+    "lat_max",
+    "lon_fwt",
+    "lat_fwt",
+    "omega_dt",
+]
 
 
 def parse_tai(t_rec: pd.Series) -> pd.Series:

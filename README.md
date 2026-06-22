@@ -1,9 +1,16 @@
 # solarflare — AR tracking & ≥M-class flare forecasting (offline pipeline)
 
-Offline, reproducible pipeline over SDO data: detect & segment active regions on
-**HMI** → track them in time → project boundaries onto **AIA** multi-wavelength
-images → extract per-AR time series → forecast the probability of a **≥M-class**
-flare (DeepFlareNet-style), evaluated with **TSS** on time-blocked splits.
+**Core concept.** Each active region is segmented **once** on the **HMI**
+magnetogram — its photospheric magnetic root — and that **single mask is
+propagated upward** onto every **AIA** wavelength (lower & upper chromosphere →
+transition region → corona). Reading the same region across every layer over
+time, the model learns the vertical magnetic–thermal coupling that separates
+flaring from non-flaring regions. Everything below is built on that one mask.
+
+Offline, reproducible pipeline over SDO data: segment & track active regions on
+**HMI** → propagate the mask onto **AIA** multi-wavelength images → extract
+per-AR cross-layer time series → forecast the probability of a **≥M-class** flare
+(DeepFlareNet-style), evaluated with **TSS** on time-blocked splits.
 
 **Docs**: [architecture](docs/architecture.md) ·
 [reproducibility guide](docs/reproducibility.md) (env, seeds, exact commands,
@@ -17,9 +24,9 @@ fixture-based suite on Linux + Windows (`.github/workflows/ci.yml`).
 ```
 solarflare/        package
   data/            Stage A: SHARP/AIA cutouts, GOES labels        (Phase A)
-  detect/          Stage B: AR detection & segmentation           (Phase B)
+  detect/          Stage B: AR segmentation (one HMI-rooted mask) (Phase B)
   track/           Stage B: temporal IoU tracking                 (Phase B)
-  features/        Stage C: WCS co-registration, per-AR features  (Phase C)
+  features/        Stage C: mask propagation, per-AR features     (Phase C)
   forecast/        Stage D: climatology (here), Holt-Winters, LSTM
   eval/            Stage E: TSS / HSS / BSS / reliability         (Phase D/E)
   viz/             Stage E: plots & overlays                      (Phase E)
@@ -31,10 +38,10 @@ scripts/           thin wrappers around CLI commands
 tests/             offline pytest suite (synthetic fixtures, no downloads)
 docs/              architecture, reproducibility, module reference, build prompts
 reports/           written reports + tracked figures
-data/              (untracked) raw FITS, caches, datasets; data/weights/ = YOLO base
+data/              (untracked) raw FITS, caches, datasets
 outputs/           (untracked) experiment artifacts:
   logs/            run logs            figures/   one-off QA images
-  forecast/        metric CSVs+plots   detect/    trained YOLO weights
+  forecast/        metric CSVs+plots   segment/   trained U-Net weights
   region_summary/  SWPC-style MP4      harpmap/   full-disk HARP-map MP4
   dashboard/       prob-dashboard MP4  (legacy DeFN-style per-box view)
   runs/            run-all manifests   tracks/    tracker outputs
@@ -142,48 +149,35 @@ Offline/CI mode: `solarflare base-rate --events-csv tests/fixtures/goes_events_s
 Results are appended to `outputs/experiments.csv` (timestamp, git SHA, config
 hash, metrics).
 
-## Phase 2: detection, segmentation & tracking
+## Phase 2: segmentation & tracking (the magnetic-root mask)
 
-- **Bootstrap labels** (`solarflare bootstrap-boxes`): AR boxes from HARP
+- **Bootstrap references** (`solarflare bootstrap-boxes`): AR boxes from HARP
   metadata via keyword-only JSOC queries (Stonyhurst LON/LAT_MIN/MAX, semantics
-  verified live) — no hand-labeling, no image downloads.
+  verified live) — no hand-labeling, no image downloads. They seed tracking and
+  the full-disk HARP overlay; AIA cropping is HARP-first.
 - **Segmentation** (`solarflare segment-sample`): a pluggable `Segmenter`
   (`solarflare/detect/segmenter.py` registry) chosen by **one config line** —
-  `segment.model: threshold | unet | surya | sam2`. `threshold` + morphology
-  (continuum < 0.85×quiet median OR |B_los| > 100 G) is the zero-ML smoke
-  baseline → per-frame AR masks cached next to the sample (`ar_masks.npy`).
-  **U-Net** (`solarflare train-unet`, segmentation-models-pytorch, ResNet-18
-  encoder) is the default (`segment.model: unet`): it distills the threshold
-  masks as pseudo-labels with a time-blocked per-sample split. Trained on
-  AR 11158 it reaches **val IoU 0.90**; on the unseen AR 11429 it agrees with
+  `segment.model: threshold | unet | surya | sam2`. The AR is segmented **once
+  on HMI** into the per-frame mask cached next to the sample (`ar_masks.npy`) —
+  the single mask Phase C propagates to every AIA layer. `threshold` +
+  morphology (continuum < 0.85×quiet median OR |B_los| > 100 G) is the zero-ML
+  smoke baseline. **U-Net** (`solarflare train-unet`, segmentation-models-pytorch,
+  ResNet-18 encoder) is the default (`segment.model: unet`): it distills the
+  threshold masks as pseudo-labels with a time-blocked per-sample split. Trained
+  on AR 11158 it reaches **val IoU 0.90**; on the unseen AR 11429 it agrees with
   the threshold baseline at pooled IoU 0.91 (generalizes across ARs). `surya`
   (NASA-IMPACT Surya `ar_segmentation`) and `sam2` (Meta SAM2 propagation) are
-  registered **stubs** that raise with setup guidance (need a GPU + weights).
-  Every implementation writes the same files behind `segment_sample_auto`, so
-  swapping the model never touches Phase C.
+  GPU-gated implementations that fall back with setup guidance when no GPU/weights
+  are present. Every implementation writes the same files behind
+  `segment_sample_auto`, so swapping the model never touches Phase C.
 - **Tracking** (`solarflare track-window`): temporal IoU with Howard synodic
   differential-rotation compensation, time-based gap budget, HARP attachment.
   Oct 2014 multi-AR demo: 39 tracks / 338 boxes, **HARP purity 1.0 (zero ID
   switches)**, AR 12192 mean compensated IoU 0.946.
-- **Detection** (`build-detect-dataset` / `train-detect` / `eval-detect`):
-  **YOLO26n** (NMS-free end-to-end, Ultralytics 8.4; auto-downloaded, not
-  committed) fine-tuned on 143 rebinned 1024² full-disk magnetograms
-  (window-blocked splits, quiet-Sun negatives). Gate G2 vs the SHARP-derived
-  boxes (match IoU 0.5):
-
-  | split (held-out window) | conf | recall | precision | matched IoU (mean) |
-  |---|---|---|---|---|
-  | val — Sep 2017 | 0.25 | 0.59 | 0.84 | 0.85 |
-  | val — Sep 2017 | 0.10 | 0.80 | 0.67 | 0.83 |
-  | test — May 2024 | 0.25 | 0.44 | 0.66 | 0.84 |
-  | test — May 2024 | 0.10 | 0.54 | 0.45 | 0.83 |
-
-  Vs the earlier YOLO11n baseline (val R0.88/P0.92, test R0.61/P0.45): YOLO26n
-  produces **tighter boxes** (matched IoU 0.83–0.85 > 0.80–0.83) but lower
-  recall at the same confidence — its NMS-free head needs a lower `conf` to
-  recover recall, a known small-data symptom (143 training frames). Decision:
-  keep YOLO26n and re-train once more AR windows are fetched. Cropping AIA
-  remains HARP-first; the detector is the no-SHARP generalization path.
+- **Full-disk frames** (`solarflare fetch-fulldisk -w <window>`): a bounded,
+  JSOC-rebinned (4096→1024) full-disk magnetogram export per window, cached under
+  `data/raw/fulldisk/<window>/`. The operational full-disk views overlay the
+  tracked HARP boxes on these frames.
 
 ## Phase 3: features & labeled sequences
 

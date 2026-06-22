@@ -83,20 +83,12 @@ qa:
   min_coverage: 0.6         # flag reprojected frames covering less of the CEA grid
 
 detect:
-  bootstrap_cadence_hours: 6      # label rows + full-disk frame cadence
+  # HARP-box query cadence (tracking, sequence builder, full-disk views) and the
+  # bounded full-disk magnetogram export that the full-disk visualizations overlay.
+  bootstrap_cadence_hours: 6      # HARP-box rows + full-disk frame cadence
   fulldisk_series: hmi.m_720s
   fulldisk_segment: magnetogram
   rebin_scale: 0.25               # JSOC-side rebin: 4096 -> 1024 px (verified live)
-  image_clip_gauss: 300           # +/- clip for 8-bit PNG conversion
-  min_box_arcsec: 20              # drop degenerate HARP boxes
-  yolo_model: data/weights/yolo26n.pt  # pretrained nano model (transfer learning; YOLO26 = NMS-free e2e)
-  yolo_imgsz: 640
-  yolo_epochs: 40
-  # Window-blocked splits: train on Cycle-24 windows + quiet negatives,
-  # validate on Sep 2017, hold out Cycle-25 May 2024 for the gate report.
-  train_windows: [ar11158_feb2011, ar11429_mar2012, ar12192_oct2014, quiet_dec2019]
-  val_windows: [ar12673_sep2017]
-  test_windows: [ar13664_may2024]
 
 segment:
   # Pluggable Segmenter (solarflare.detect.segmenter registry); one-line swap.

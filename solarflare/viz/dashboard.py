@@ -211,7 +211,8 @@ def render_dashboard(
     fits_files = sorted(fulldisk_dir.glob("*.fits"))
     if not fits_files:
         raise FileNotFoundError(
-            f"no full-disk frames under {fulldisk_dir} - run build-detect-dataset"
+            f"no full-disk frames under {fulldisk_dir}; "
+            f"run `solarflare fetch-fulldisk -w {window_name}` first"
         )
     boxes = fetch_harp_boxes(
         window.start, window.end, cfg.detect.bootstrap_cadence_hours, cfg.paths.cache_dir

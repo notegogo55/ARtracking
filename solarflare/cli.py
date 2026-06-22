@@ -468,77 +468,31 @@ def track_window(
     )
 
 
-@app.command("build-detect-dataset")
-def build_detect_dataset(
+@app.command("fetch-fulldisk")
+def fetch_fulldisk(
+    window: Annotated[str, typer.Option("--window", "-w", help="Study window name")],
     config: ConfigOpt = DEFAULT_CONFIG,
     email: Annotated[str, typer.Option(help="JSOC notify email (default: $JSOC_EMAIL)")] = "",
-    out: Annotated[Path, typer.Option(help="Dataset root")] = Path("data/detect_dataset"),
 ) -> None:
-    """Download bounded full-disk frames + write the YOLO dataset (window-blocked splits)."""
-    from solarflare.detect.dataset import build_yolo_dataset
+    """Download bounded rebinned full-disk magnetograms for a window (for the full-disk views).
+
+    The frames land in data/raw/fulldisk/<window>/ and feed render-region-summary /
+    render-harpmap / render-dashboard, which overlay the tracked HARP boxes on each frame.
+    """
+    from solarflare.detect.fulldisk import fetch_fulldisk_frames
 
     cfg = _load(config)
     email = email or os.environ.get("JSOC_EMAIL", "")
     if not email:
         typer.secho("JSOC email required (set JSOC_EMAIL or --email)", fg="red")
         raise typer.Exit(code=1)
-    summary = build_yolo_dataset(cfg, email, out)
-    typer.echo(summary.to_string(index=False))
-    typer.echo(f"dataset: {out / 'dataset.yaml'}")
-
-
-@app.command("train-detect")
-def train_detect(
-    config: ConfigOpt = DEFAULT_CONFIG,
-    dataset: Annotated[Path, typer.Option(help="dataset.yaml path")] = Path(
-        "data/detect_dataset/dataset.yaml"
-    ),
-    epochs: Annotated[int | None, typer.Option(help="Override config epochs")] = None,
-    device: Annotated[str | None, typer.Option(help="cpu / 0 / mps (default: auto)")] = None,
-) -> None:
-    """Fine-tune pretrained YOLO on the bootstrapped dataset."""
-    from solarflare.detect.yolo import train_detector
-
-    cfg = _load(config)
-    weights = train_detector(
-        cfg, dataset, Path(cfg.paths.outputs_dir) / "detect", epochs=epochs, device=device
-    )
-    typer.echo(f"weights: {weights}")
-
-
-@app.command("eval-detect")
-def eval_detect(
-    weights: Annotated[Path, typer.Option(exists=True)],
-    config: ConfigOpt = DEFAULT_CONFIG,
-    dataset_root: Annotated[Path, typer.Option()] = Path("data/detect_dataset"),
-    split: Annotated[str, typer.Option(help="val | test")] = "test",
-    conf: Annotated[float, typer.Option()] = 0.25,
-    iou_match: Annotated[float, typer.Option(help="IoU threshold for a match")] = 0.5,
-) -> None:
-    """Gate G2 report: detector IoU/recall/precision vs SHARP-derived boxes."""
-    from solarflare.detect.dataset import load_yolo_labels
-    from solarflare.detect.yolo import evaluate_vs_truth, predict_boxes
-
-    cfg = _load(config)
-    images = sorted((dataset_root / "images" / split).glob("*.png"))
-    if not images:
-        typer.secho(f"no images under {dataset_root}/images/{split}", fg="red")
+    win = next((w for w in cfg.study.windows if w.name == window), None)
+    if win is None:
+        typer.secho(f"unknown window {window!r}", fg="red")
         raise typer.Exit(code=1)
-    truth = load_yolo_labels(dataset_root, split)
-    preds = predict_boxes(weights, images, conf=conf)
-    metrics = evaluate_vs_truth(preds, truth, iou_match=iou_match)
-    for key, value in metrics.items():
-        typer.echo(f"{key:>22}: {value:.4f}" if isinstance(value, float) else f"{key:>22}: {value}")
-    append_experiment_row(
-        cfg.paths.experiment_log,
-        {
-            "phase": "P2",
-            "experiment": f"detect_eval_{split}",
-            "weights": str(weights),
-            "config_hash": cfg.short_hash(),
-            **metrics,
-        },
-    )
+    out_dir = Path(cfg.paths.data_root) / "raw" / "fulldisk" / window
+    frames = fetch_fulldisk_frames(cfg, win, email, out_dir)
+    typer.echo(f"frames:  {len(frames)} full-disk magnetograms in {out_dir}")
 
 
 @app.command("build-features")
