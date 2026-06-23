@@ -67,7 +67,9 @@ column-set may grow).
   `crossval_table`, `crossval_grid` (per {horizon×class} cell) + `grid_label_columns`,
   `holdout_evaluate` (frozen thresholds), reliability/ROC plots, `aggregate_table`.
 - `swansf`: streaming SWAN-SF adapter (see reproducibility gotchas).
-- `ablation`: grouped permutation importance + drop-one retrain.
+- `ablation`: grouped permutation importance + drop-one retrain; the 6-case
+  atmospheric-layer matrix (`LAYER_CASES`, `case_feature_indices`, `ablate_layers`,
+  `layer_case_bar_chart`) — dynamic channel masking scored per {horizon×class} cell.
 
 ## `solarflare.eval`, `solarflare.viz`, `solarflare.pipeline` — stage E
 - `eval.metrics`: contingency, TSS/HSS/BSS/Brier, `best_tss_threshold`

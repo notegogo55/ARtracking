@@ -1081,6 +1081,76 @@ def ablate(
     typer.echo(f"outputs: {out_dir}")
 
 
+@app.command("ablate-layers")
+def ablate_layers_cmd(
+    dataset: Annotated[Path, typer.Option(exists=True, file_okay=False)],
+    config: ConfigOpt = DEFAULT_CONFIG,
+    models: Annotated[str, typer.Option(help="Comma list: holt_winters,lstm,ensemble")] = (
+        "holt_winters,lstm"
+    ),
+    folds: Annotated[int, typer.Option()] = 3,
+    max_epochs: Annotated[int | None, typer.Option(help="Override LSTM epochs")] = None,
+    embargo_hours: Annotated[
+        float | None, typer.Option(help="Override split.embargo_hours")
+    ] = None,
+    out: Annotated[Path | None, typer.Option()] = None,
+    tag: Annotated[str, typer.Option()] = "layer_ablation",
+) -> None:
+    """M6: the 6-case atmospheric-layer ablation matrix (TSS/HSS/BSS per case x cell)."""
+    import numpy as np
+    import pandas as pd
+
+    from solarflare.forecast.ablation import ablate_layers, layer_case_bar_chart
+
+    cfg = _load(config)
+    data = np.load(dataset / "X.npz", allow_pickle=False)
+    X = data["X"]
+    feature_names = [str(n) for n in data["feature_names"]]
+    samples = pd.read_parquet(dataset / "samples.parquet")
+    out_dir = out or Path(cfg.paths.outputs_dir) / "forecast" / tag
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    table, _ = ablate_layers(
+        X,
+        samples,
+        feature_names,
+        n_folds=folds,
+        embargo_hours=(embargo_hours if embargo_hours is not None else cfg.split.embargo_hours),
+        seed=cfg.project.seed,
+        model_names=tuple(m.strip() for m in models.split(",")),
+        lstm_overrides={"max_epochs": max_epochs} if max_epochs else None,
+    )
+    if table.empty:
+        typer.secho("no usable layer cases (single-class cells / embargo wiped folds)", fg="red")
+        raise typer.Exit(code=1)
+    table.to_csv(out_dir / "layer_ablation.csv", index=False)
+    for model in table["model"].unique():
+        for label_col in table["label_col"].unique():
+            layer_case_bar_chart(
+                table, out_dir / f"tss_by_case_{model}_{label_col}.png", model, label_col
+            )
+
+    show = ["case", "n_aia_channels", "label_col", "model", "tss_mean", "hss_mean", "bss_mean"]
+    typer.echo(table[show].round(4).to_string(index=False))
+    typer.echo(f"outputs: {out_dir}")
+    for _, row in table.iterrows():
+        append_experiment_row(
+            cfg.paths.experiment_log,
+            {
+                "phase": "P5",
+                "experiment": f"layer_ablation_{tag}",
+                "case": row["case"],
+                "n_aia_channels": int(row["n_aia_channels"]),
+                "label_col": row["label_col"],
+                "model": row["model"],
+                "tss_mean": round(float(row["tss_mean"]), 4),
+                "hss_mean": round(float(row["hss_mean"]), 4),
+                "bss_mean": round(float(row["bss_mean"]), 4),
+                "config_hash": cfg.short_hash(),
+            },
+        )
+
+
 @app.command("render-video")
 def render_video(
     sample_dir: Annotated[Path, typer.Option("--sample-dir", exists=True, file_okay=False)],

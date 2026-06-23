@@ -280,6 +280,14 @@ e.g. ≥X on the thin own-data set — are skipped with a warning).
   the correlated-features caveat documented. The same harness on the small
   2-AR own-data set runs but yields no signal (reported as anecdotal, no
   conclusion until more AR windows are fetched).
+- **Atmospheric-layer ablation** (`solarflare ablate-layers`): the proposal's
+  6-case matrix — HMI is always the magnetic root, and each case dynamically masks
+  the feature matrix to a layer subset (no re-fetch): **(1)** HMI only · **(2)**
+  +1600/304 (low atmosphere) · **(3)** +171/193/211 (quiet corona) · **(4)** +94/131
+  (flaring corona) · **(5)** +171/94 (core synergy) · **(6)** + all AIA (full
+  spectrum). Each case is scored on the full {horizon×class} grid (TSS/HSS/BSS) with
+  a TSS-by-case bar chart, quantifying the minimal-channel-set vs accuracy trade-off
+  (expectation: the 94/131 thermal channels separate confined vs eruptive flares).
 - Evaluation report with tables + figures: `reports/report_phase5.md`
   (regenerate via `uv run python scripts/build_report.py`).
 
