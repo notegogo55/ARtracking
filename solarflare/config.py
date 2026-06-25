@@ -185,7 +185,7 @@ class SegmentConfig(_StrictModel):
     exist), with a time-blocked train/val split per sample (no leakage).
     """
 
-    model: Literal["threshold", "unet", "surya", "sam2"] = "threshold"
+    model: Literal["threshold", "unet", "surya", "sam2", "fulldisk"] = "threshold"
     spot_threshold: float = Field(default=0.85, gt=0, lt=1)  # fraction of quiet-Sun median
     bfield_threshold_gauss: float = Field(default=100.0, gt=0)
     min_region_pixels: int = Field(default=64, ge=1)

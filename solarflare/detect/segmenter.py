@@ -130,3 +130,18 @@ class SAM2Segmenter(Segmenter):
         from solarflare.detect.foundation import segment_sample_sam2
 
         return segment_sample_sam2(sample, self.cfg)
+
+
+@register_segmenter
+class FullDiskSegmenter(Segmenter):
+    """Threshold full-disk HMI, reproject mask to HARP CEA (operational mode).
+
+    Requires full-disk frames pre-fetched via `solarflare fetch-fulldisk`.
+    """
+
+    name = "fulldisk"
+
+    def segment_sample(self, sample) -> tuple[Path, pd.DataFrame]:
+        from solarflare.detect.fulldisk_seg import segment_sample_fulldisk
+
+        return segment_sample_fulldisk(sample, self.cfg)

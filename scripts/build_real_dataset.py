@@ -71,23 +71,36 @@ def run(cmd: list[str], dry: bool) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--config", type=Path, default=Path("configs/default.yaml"))
-    ap.add_argument("--runner", default="uv run solarflare",
-                    help='How to invoke the CLI (default: "uv run solarflare"). '
-                         'Use "python -m solarflare.cli" or "solarflare" if you prefer.')
-    ap.add_argument("--windows", default="",
-                    help="Comma-separated subset of window names (default: all active).")
+    ap.add_argument(
+        "--runner",
+        default="uv run solarflare",
+        help='How to invoke the CLI (default: "uv run solarflare"). '
+        'Use "python -m solarflare.cli" or "solarflare" if you prefer.',
+    )
+    ap.add_argument(
+        "--windows",
+        default="",
+        help="Comma-separated subset of window names (default: all active).",
+    )
     ap.add_argument("--email", default="", help="JSOC notify email (else uses $JSOC_EMAIL).")
-    ap.add_argument("--overwrite", action="store_true",
-                    help="Re-fetch and re-segment even if outputs exist.")
-    ap.add_argument("--skip-build", action="store_true",
-                    help="Do the per-window fetch/segment but not the final build-dataset.")
-    ap.add_argument("--forecast", action="store_true",
-                    help="After building, run forecast-benchmark CV on the dataset.")
-    ap.add_argument("--dry-run", action="store_true",
-                    help="Print the plan; run nothing.")
+    ap.add_argument(
+        "--overwrite", action="store_true", help="Re-fetch and re-segment even if outputs exist."
+    )
+    ap.add_argument(
+        "--skip-build",
+        action="store_true",
+        help="Do the per-window fetch/segment but not the final build-dataset.",
+    )
+    ap.add_argument(
+        "--forecast",
+        action="store_true",
+        help="After building, run forecast-benchmark CV on the dataset.",
+    )
+    ap.add_argument("--dry-run", action="store_true", help="Print the plan; run nothing.")
     args = ap.parse_args(argv)
 
     if not args.config.exists():
@@ -96,9 +109,11 @@ def main(argv: list[str] | None = None) -> int:
 
     cfg = load_config(args.config)
     runner = shlex.split(args.runner)
+    data_root = Path(cfg.get("paths", {}).get("data_root", "data"))
     cache_dir = Path(cfg.get("paths", {}).get("cache_dir", "data/cache"))
     version = cfg.get("features", {}).get("dataset_version", "v1")
     dataset_dir = Path("data/datasets") / f"seq_{version}"
+    needs_fulldisk = cfg.get("segment", {}).get("model") == "fulldisk"
 
     wins = active_windows(cfg)
     if args.windows:
@@ -112,8 +127,10 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     email_opt = ["--email", args.email] if args.email else []
-    print(f"Plan: {len(wins)} active window(s) -> {dataset_dir}"
-          f"{'  [DRY RUN]' if args.dry_run else ''}\n")
+    print(
+        f"Plan: {len(wins)} active window(s) -> {dataset_dir}"
+        f"{'  [DRY RUN]' if args.dry_run else ''}\n"
+    )
 
     failures: list[str] = []
     for w in wins:
@@ -133,6 +150,18 @@ def main(argv: list[str] | None = None) -> int:
                 failures.append(name)
                 continue
             sdir = sample_dir(cache_dir, harp, name)  # re-resolve after fetch
+
+        # 1.5) fetch full-disk frames (required when segment.model == 'fulldisk')
+        if needs_fulldisk:
+            fd_dir = data_root / "raw" / "fulldisk" / name
+            if fd_dir.exists() and any(fd_dir.glob("*.fits")) and not args.overwrite:
+                print(f"  - fetch-fulldisk: SKIP ({len(list(fd_dir.glob('*.fits')))} frames)")
+            else:
+                cmd = runner + ["fetch-fulldisk", "--window", name] + email_opt
+                if run(cmd, args.dry_run) != 0:
+                    print(f"  ! fetch-fulldisk failed for {name}")
+                    failures.append(name)
+                    continue
 
         # 2) segment (skip if masks exist)
         masks = sdir / "ar_masks.npy"
@@ -155,17 +184,22 @@ def main(argv: list[str] | None = None) -> int:
     # 4) optional CV
     if args.forecast and not args.skip_build:
         print("\n[forecast-benchmark]  time-blocked CV on the rebuilt dataset")
-        run(runner + ["forecast-benchmark", "--dataset", str(dataset_dir),
-                      "--tag", "seqv1_full"], args.dry_run)
+        run(
+            runner + ["forecast-benchmark", "--dataset", str(dataset_dir), "--tag", "seqv1_full"],
+            args.dry_run,
+        )
 
     # summary
     stats = dataset_dir / "stats.json"
     if stats.exists() and not args.dry_run:
         import json
+
         s = json.loads(stats.read_text())
-        print(f"\nseq_{version}: {s['n_sequences']} sequences, "
-              f"{s['n_positive']} positive, {s['n_ars']} ARs, "
-              f"windows={s['windows']}")
+        print(
+            f"\nseq_{version}: {s['n_sequences']} sequences, "
+            f"{s['n_positive']} positive, {s['n_ars']} ARs, "
+            f"windows={s['windows']}"
+        )
     if failures:
         print(f"\n[done with warnings] windows that failed: {sorted(set(failures))}")
         return 1

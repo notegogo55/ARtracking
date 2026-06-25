@@ -64,6 +64,33 @@ study:
         - noaa: 13664
           harp: 11149
           notes: "Cycle 25 'Gannon storm' source region; X-flare series incl. X8.7 on 2024-05-14."
+    # --- Clean-negative ARs (sizable spot group, NO >=M flare in-window) added 2026-06-25 to
+    #     de-skew the own-data forecast set. NOAA<->HARP taken from JSOC SHARP NOAA_AR metadata
+    #     (hmi.sharp_720s keyword query) + verified flare-quiet against HEK (>=M) over the window.
+    - name: quiet_ar12565_jul2016
+      start: 2016-07-15T00:00:00
+      end: 2016-07-23T00:00:00
+      kind: active
+      targets:
+        - noaa: 12565
+          harp: 6670
+          notes: "Clean negative: sizable spot group, no >=M flare (Cycle 24 declining)."
+    - name: quiet_ar12641_mar2017
+      start: 2017-03-01T00:00:00
+      end: 2017-03-09T00:00:00
+      kind: active
+      targets:
+        - noaa: 12641
+          harp: 6961
+          notes: "Clean negative: window had zero >=M flares solar-wide (Cycle 24)."
+    - name: quiet_ar11768_jun2013
+      start: 2013-06-06T00:00:00
+      end: 2013-06-14T00:00:00
+      kind: active
+      targets:
+        - noaa: 11768
+          harp: 2832
+          notes: "Clean negative: long-tracked spot group, no >=M flare (Cycle 24 weak max)."
 
 data:
   aia_channels: [94, 131, 171, 193, 211, 304, 1600, 1700]  # Angstrom
@@ -94,7 +121,7 @@ segment:
   # Pluggable Segmenter (solarflare.detect.segmenter registry); one-line swap.
   #   threshold | unet | surya | sam2   (unet needs `solarflare train-unet` first;
   #   surya/sam2 are stubs that raise with setup guidance -- need a GPU + weights).
-  model: unet
+  model: fulldisk
   spot_threshold: 0.85            # continuum < 0.85 x quiet-Sun median => sunspot
   bfield_threshold_gauss: 100     # |B_los| > 100 G => active pixel
   min_region_pixels: 64

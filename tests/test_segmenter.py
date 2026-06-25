@@ -15,8 +15,8 @@ from solarflare.detect.segmenter import (
 )
 
 
-def test_registry_lists_all_four_models():
-    assert available_segmenters() == ["sam2", "surya", "threshold", "unet"]
+def test_registry_lists_all_models():
+    assert available_segmenters() == ["fulldisk", "sam2", "surya", "threshold", "unet"]
 
 
 @pytest.mark.parametrize(
