@@ -12,8 +12,8 @@ st.title("🎬 วิดีโอทั้งหมด")
 videos = common.list_videos()
 if not videos:
     st.info(
-        "ยังไม่มีวิดีโอ — สร้างได้ด้วย `solarflare render-dashboard`, "
-        "`solarflare render-harpmap` หรือ `solarflare render-video`"
+        "ยังไม่มีวิดีโอ — สร้างได้ด้วย `solarflare render-region-summary`, "
+        "`solarflare render-harpmap`, `solarflare render-dashboard` หรือ `solarflare render-video`"
     )
     st.stop()
 

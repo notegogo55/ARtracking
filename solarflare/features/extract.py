@@ -32,12 +32,26 @@ _MAX_AGG_SUFFIXES = ("_max", "b_peak")
 def frame_features(channels: dict[str, np.ndarray], mask: np.ndarray) -> dict:
     """Features for one timestep. `channels` maps array key -> 2D frame.
 
+    Single-mask propagation contract (the project's core concept): `mask` is the
+    ONE HMI-rooted AR mask, and it is the *only* region every layer is read
+    through. The same boolean index drives the magnetogram (flux/area) and each
+    AIA channel (max-in-mask) — there is NO per-channel re-segmentation. Every
+    channel must share the mask's grid (asserted below), since a propagated mask
+    is only valid on the co-registered grid. Guarded by `tests/test_propagation.py`.
+
     AIA keys ('aia_*') produce '<key>_max' (max inside mask). The magnetogram
     produces unsigned/signed flux (G*px), peak |B| (G) and area (px) — native
     pixel units; the CEA grid is equal-area so a physical conversion is one
     constant multiplier, deferred to the data dictionary.
     """
     mask = mask.astype(bool)
+    for key, frame in channels.items():
+        if np.asarray(frame).shape != mask.shape:
+            raise ValueError(
+                f"channel {key!r} shape {np.asarray(frame).shape} != mask shape "
+                f"{mask.shape}: the HMI-rooted mask is not co-registered onto this "
+                "layer (propagation contract violated)"
+            )
     out: dict[str, float] = {"area_px": float(mask.sum())}
     blos = channels.get("hmi_magnetogram")
     if blos is not None:
@@ -80,10 +94,7 @@ def resample_features(frame_df: pd.DataFrame, cadence_minutes: int) -> pd.DataFr
     """
     df = frame_df.set_index("time").sort_index()
     rule = f"{cadence_minutes}min"
-    agg = {
-        col: ("max" if col.endswith(_MAX_AGG_SUFFIXES) else "median")
-        for col in df.columns
-    }
+    agg = {col: ("max" if col.endswith(_MAX_AGG_SUFFIXES) else "median") for col in df.columns}
     out = df.resample(rule, label="right", closed="right").agg(agg)
     out = out.dropna(how="all").reset_index().rename(columns={"index": "time"})
     return out
@@ -99,8 +110,6 @@ def add_gradients(df: pd.DataFrame, exclude: tuple[str, ...] = ("time",)) -> pd.
     return out
 
 
-def build_frame_pipeline(
-    frame_df: pd.DataFrame, cadence_minutes: int
-) -> pd.DataFrame:
+def build_frame_pipeline(frame_df: pd.DataFrame, cadence_minutes: int) -> pd.DataFrame:
     """frame features -> fixed cadence -> gradients (the full leak-safe chain)."""
     return add_gradients(resample_features(frame_df, cadence_minutes))

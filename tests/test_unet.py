@@ -115,7 +115,7 @@ def test_dispatcher_threshold_and_missing_weights(tiny_sample, tmp_path):
     assert areas["ar_pixels"].gt(0).all()  # the synthetic blob is always present
 
     # unet path without trained weights: actionable error
-    cfg_unet = _tiny_seg_cfg(tmp_path / "missing.pt").model_copy(update={"method": "unet"})
+    cfg_unet = _tiny_seg_cfg(tmp_path / "missing.pt").model_copy(update={"model": "unet"})
     with pytest.raises(FileNotFoundError, match="train-unet"):
         segment_sample_auto(tiny_sample, cfg_unet)
 

@@ -9,11 +9,27 @@ Downloads are idempotent: existing non-empty target directories are reused.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from datetime import datetime
 from pathlib import Path
 
 log = logging.getLogger(__name__)
+
+#: T_REC stamp in a SHARP filename, e.g. ...11149.20240510_000000_TAI.magnetogram.fits
+_TREC_RE = re.compile(r"(\d{8})_(\d{6})_TAI")
+
+
+def _trec_from_name(name: str) -> datetime | None:
+    """Parse the nominal T_REC time from a SHARP filename (None for recnum-style)."""
+    m = _TREC_RE.search(name)
+    if m is None:
+        return None
+    try:
+        return datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S")
+    except ValueError:
+        return None
+
 
 EUV_CHANNELS = {94, 131, 171, 193, 211, 304, 335}
 UV_CHANNELS = {1600, 1700}
@@ -74,7 +90,24 @@ def _subsample_sharp_files(
     is already hourly, and it works for both JSOC filename styles (recnum and
     T_REC) by grouping on the per-timestamp prefix (segment suffix stripped).
     """
-    if not cadence_seconds or cadence_seconds <= native_seconds or not files:
+    if not files:
+        return files
+    # Restrict a reused (possibly whole-window) dir to the requested [start, end]:
+    # a sub-range fetch (e.g. one day of an already fully-staged window) must not
+    # load the entire staged span. Best-effort -- only T_REC-style names carry a
+    # parseable stamp; recnum-style names are kept. If nothing parses in range,
+    # fall back to all files (never strand the loader with an empty list).
+    within = [f for f in files if (t := _trec_from_name(Path(f).name)) is None or start <= t <= end]
+    if within and len(within) != len(files):
+        log.info(
+            "restricting reused SHARP to %s..%s: %d -> %d files",
+            start,
+            end,
+            len(files),
+            len(within),
+        )
+        files = within
+    if not cadence_seconds or cadence_seconds <= native_seconds:
         return files
     groups: dict[str, list[Path]] = {}
     for f in files:

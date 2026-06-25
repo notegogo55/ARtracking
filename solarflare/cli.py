@@ -324,26 +324,32 @@ def bootstrap_boxes(
 def segment_sample_cmd(
     sample_dir: Annotated[Path, typer.Option("--sample-dir", exists=True, file_okay=False)],
     config: ConfigOpt = DEFAULT_CONFIG,
-    method: Annotated[
-        str | None, typer.Option(help="threshold | unet (default: config segment.method)")
+    model: Annotated[
+        str | None,
+        typer.Option(
+            "--model",
+            "--method",  # backward-compatible alias
+            help="threshold | unet | surya | sam2 (default: config segment.model)",
+        ),
     ] = None,
     weights: Annotated[
         Path | None, typer.Option(help="U-Net weights (default: config segment.unet_weights)")
     ] = None,
     qa_frame: Annotated[int | None, typer.Option(help="Frame for the QA plot")] = None,
 ) -> None:
-    """AR masks for a cached sample (threshold baseline or U-Net); writes masks + QA plot."""
+    """AR masks for a cached sample via the selected Segmenter; writes masks + QA plot."""
     from solarflare.data.cache import load_sample
     from solarflare.detect.segment import segment_sample_auto, segmentation_qa_plot
+    from solarflare.detect.segmenter import available_segmenters
     from solarflare.viz.overlay import pick_overlay_frame
 
     cfg = _load(config)
-    if method is not None and method not in ("threshold", "unet"):
-        typer.secho(f"unknown --method {method!r} (threshold | unet)", fg="red")
+    if model is not None and model not in available_segmenters():
+        typer.secho(f"unknown --model {model!r} ({' | '.join(available_segmenters())})", fg="red")
         raise typer.Exit(code=1)
     seg_cfg = cfg.segment.model_copy(
         update={
-            **({"method": method} if method else {}),
+            **({"model": model} if model else {}),
             **({"unet_weights": weights} if weights else {}),
         }
     )
@@ -406,7 +412,7 @@ def train_unet_cmd(
     best = history["val_iou"].max()
     typer.echo(history.round(4).to_string(index=False))
     typer.echo(f"weights: {weights}  (best val IoU {best:.4f})")
-    typer.echo("use it with:  segment.method: unet  (or `segment-sample --method unet`)")
+    typer.echo("use it with:  segment.model: unet  (or `segment-sample --model unet`)")
     append_experiment_row(
         cfg.paths.experiment_log,
         {
@@ -462,77 +468,31 @@ def track_window(
     )
 
 
-@app.command("build-detect-dataset")
-def build_detect_dataset(
+@app.command("fetch-fulldisk")
+def fetch_fulldisk(
+    window: Annotated[str, typer.Option("--window", "-w", help="Study window name")],
     config: ConfigOpt = DEFAULT_CONFIG,
     email: Annotated[str, typer.Option(help="JSOC notify email (default: $JSOC_EMAIL)")] = "",
-    out: Annotated[Path, typer.Option(help="Dataset root")] = Path("data/detect_dataset"),
 ) -> None:
-    """Download bounded full-disk frames + write the YOLO dataset (window-blocked splits)."""
-    from solarflare.detect.dataset import build_yolo_dataset
+    """Download bounded rebinned full-disk magnetograms for a window (for the full-disk views).
+
+    The frames land in data/raw/fulldisk/<window>/ and feed render-region-summary /
+    render-harpmap / render-dashboard, which overlay the tracked HARP boxes on each frame.
+    """
+    from solarflare.detect.fulldisk import fetch_fulldisk_frames
 
     cfg = _load(config)
     email = email or os.environ.get("JSOC_EMAIL", "")
     if not email:
         typer.secho("JSOC email required (set JSOC_EMAIL or --email)", fg="red")
         raise typer.Exit(code=1)
-    summary = build_yolo_dataset(cfg, email, out)
-    typer.echo(summary.to_string(index=False))
-    typer.echo(f"dataset: {out / 'dataset.yaml'}")
-
-
-@app.command("train-detect")
-def train_detect(
-    config: ConfigOpt = DEFAULT_CONFIG,
-    dataset: Annotated[Path, typer.Option(help="dataset.yaml path")] = Path(
-        "data/detect_dataset/dataset.yaml"
-    ),
-    epochs: Annotated[int | None, typer.Option(help="Override config epochs")] = None,
-    device: Annotated[str | None, typer.Option(help="cpu / 0 / mps (default: auto)")] = None,
-) -> None:
-    """Fine-tune pretrained YOLO on the bootstrapped dataset."""
-    from solarflare.detect.yolo import train_detector
-
-    cfg = _load(config)
-    weights = train_detector(
-        cfg, dataset, Path(cfg.paths.outputs_dir) / "detect", epochs=epochs, device=device
-    )
-    typer.echo(f"weights: {weights}")
-
-
-@app.command("eval-detect")
-def eval_detect(
-    weights: Annotated[Path, typer.Option(exists=True)],
-    config: ConfigOpt = DEFAULT_CONFIG,
-    dataset_root: Annotated[Path, typer.Option()] = Path("data/detect_dataset"),
-    split: Annotated[str, typer.Option(help="val | test")] = "test",
-    conf: Annotated[float, typer.Option()] = 0.25,
-    iou_match: Annotated[float, typer.Option(help="IoU threshold for a match")] = 0.5,
-) -> None:
-    """Gate G2 report: detector IoU/recall/precision vs SHARP-derived boxes."""
-    from solarflare.detect.dataset import load_yolo_labels
-    from solarflare.detect.yolo import evaluate_vs_truth, predict_boxes
-
-    cfg = _load(config)
-    images = sorted((dataset_root / "images" / split).glob("*.png"))
-    if not images:
-        typer.secho(f"no images under {dataset_root}/images/{split}", fg="red")
+    win = next((w for w in cfg.study.windows if w.name == window), None)
+    if win is None:
+        typer.secho(f"unknown window {window!r}", fg="red")
         raise typer.Exit(code=1)
-    truth = load_yolo_labels(dataset_root, split)
-    preds = predict_boxes(weights, images, conf=conf)
-    metrics = evaluate_vs_truth(preds, truth, iou_match=iou_match)
-    for key, value in metrics.items():
-        typer.echo(f"{key:>22}: {value:.4f}" if isinstance(value, float) else f"{key:>22}: {value}")
-    append_experiment_row(
-        cfg.paths.experiment_log,
-        {
-            "phase": "P2",
-            "experiment": f"detect_eval_{split}",
-            "weights": str(weights),
-            "config_hash": cfg.short_hash(),
-            **metrics,
-        },
-    )
+    out_dir = Path(cfg.paths.data_root) / "raw" / "fulldisk" / window
+    frames = fetch_fulldisk_frames(cfg, win, email, out_dir)
+    typer.echo(f"frames:  {len(frames)} full-disk magnetograms in {out_dir}")
 
 
 @app.command("build-features")
@@ -622,6 +582,8 @@ def build_dataset(
             lon_series=lon_series,
             max_lon_deg=cfg.geometry.max_cm_longitude_deg,
             min_valid_fraction=cfg.features.min_valid_fraction,
+            lead_grid=cfg.forecast.lead_grid,
+            class_grid=cfg.forecast.class_grid,
         )
         typer.echo(
             f"{sdir.name}: {len(rows)} sequences "
@@ -647,6 +609,8 @@ def build_dataset(
             "lookback_steps": lookback_steps,
             "lead_hours": cfg.forecast.lead_hours,
             "flare_class_threshold": cfg.forecast.flare_class_threshold,
+            "lead_grid": cfg.forecast.lead_grid,
+            "class_grid": cfg.forecast.class_grid,
             "max_cm_longitude_deg": cfg.geometry.max_cm_longitude_deg,
             "min_valid_fraction": cfg.features.min_valid_fraction,
             "config_hash": cfg.short_hash(),
@@ -779,6 +743,80 @@ def forecast_benchmark(
                 "lookback_steps": lookback_steps or X.shape[1],
                 "tss_mean": round(float(row["tss_mean"]), 4),
                 "tss_std": round(float(row.get("tss_std", np.nan)), 4),
+                "hss_mean": round(float(row["hss_mean"]), 4),
+                "bss_mean": round(float(row["bss_mean"]), 4),
+                "config_hash": cfg.short_hash(),
+            },
+        )
+
+
+@app.command("forecast-grid")
+def forecast_grid(
+    dataset: Annotated[
+        Path, typer.Option(exists=True, file_okay=False, help="Dir with X.npz + samples.parquet")
+    ],
+    config: ConfigOpt = DEFAULT_CONFIG,
+    models: Annotated[
+        str, typer.Option(help="Comma list: climatology,holt_winters,lstm,ensemble")
+    ] = "climatology,holt_winters,lstm,ensemble",
+    folds: Annotated[int, typer.Option()] = 5,
+    max_epochs: Annotated[int | None, typer.Option(help="Override LSTM epochs")] = None,
+    embargo_hours: Annotated[
+        float | None, typer.Option(help="Override split.embargo_hours")
+    ] = None,
+    out: Annotated[Path | None, typer.Option(help="Output dir")] = None,
+    tag: Annotated[str, typer.Option(help="Run tag for outputs/experiment log")] = "grid",
+) -> None:
+    """M3: TSS/HSS/BSS for every {horizon x class} cell (label_{H}h_{C}) + per-cell reliability."""
+    import numpy as np
+    import pandas as pd
+
+    from solarflare.forecast.validate import crossval_grid, reliability_plot
+
+    cfg = _load(config)
+    data = np.load(dataset / "X.npz", allow_pickle=False)
+    X = data["X"]
+    feature_names = [str(n) for n in data["feature_names"]]
+    samples = pd.read_parquet(dataset / "samples.parquet")
+    out_dir = out or Path(cfg.paths.outputs_dir) / "forecast" / tag
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    table, oof_by_cell = crossval_grid(
+        X,
+        samples,
+        feature_names,
+        horizon_steps=X.shape[1],
+        n_folds=folds,
+        embargo_hours=(embargo_hours if embargo_hours is not None else cfg.split.embargo_hours),
+        seed=cfg.project.seed,
+        model_names=tuple(m.strip() for m in models.split(",")),
+        lstm_overrides={"max_epochs": max_epochs} if max_epochs else None,
+    )
+    if table.empty:
+        typer.secho(
+            "no usable grid cells (each had a single class, or embargo wiped the folds)", fg="red"
+        )
+        raise typer.Exit(code=1)
+    table.to_csv(out_dir / "grid_metrics.csv", index=False)
+    for col, oof in oof_by_cell.items():
+        reliability_plot(oof, out_dir / f"reliability_{col}.png")
+
+    show = ["label_col", "n_positive", "model", "tss_mean", "hss_mean", "bss_mean"]
+    typer.echo(table[show].round(4).to_string(index=False))
+    typer.echo(f"outputs: {out_dir}")
+    for _, row in table.iterrows():
+        append_experiment_row(
+            cfg.paths.experiment_log,
+            {
+                "phase": "P4",
+                "experiment": f"forecast_grid_{tag}",
+                "label_col": row["label_col"],
+                "horizon_h": row["horizon_h"],
+                "class": row["class"],
+                "n_positive": int(row["n_positive"]),
+                "model": row["model"],
+                "dataset": str(dataset),
+                "tss_mean": round(float(row["tss_mean"]), 4),
                 "hss_mean": round(float(row["hss_mean"]), 4),
                 "bss_mean": round(float(row["bss_mean"]), 4),
                 "config_hash": cfg.short_hash(),
@@ -1043,6 +1081,76 @@ def ablate(
     typer.echo(f"outputs: {out_dir}")
 
 
+@app.command("ablate-layers")
+def ablate_layers_cmd(
+    dataset: Annotated[Path, typer.Option(exists=True, file_okay=False)],
+    config: ConfigOpt = DEFAULT_CONFIG,
+    models: Annotated[str, typer.Option(help="Comma list: holt_winters,lstm,ensemble")] = (
+        "holt_winters,lstm"
+    ),
+    folds: Annotated[int, typer.Option()] = 3,
+    max_epochs: Annotated[int | None, typer.Option(help="Override LSTM epochs")] = None,
+    embargo_hours: Annotated[
+        float | None, typer.Option(help="Override split.embargo_hours")
+    ] = None,
+    out: Annotated[Path | None, typer.Option()] = None,
+    tag: Annotated[str, typer.Option()] = "layer_ablation",
+) -> None:
+    """M6: the 6-case atmospheric-layer ablation matrix (TSS/HSS/BSS per case x cell)."""
+    import numpy as np
+    import pandas as pd
+
+    from solarflare.forecast.ablation import ablate_layers, layer_case_bar_chart
+
+    cfg = _load(config)
+    data = np.load(dataset / "X.npz", allow_pickle=False)
+    X = data["X"]
+    feature_names = [str(n) for n in data["feature_names"]]
+    samples = pd.read_parquet(dataset / "samples.parquet")
+    out_dir = out or Path(cfg.paths.outputs_dir) / "forecast" / tag
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    table, _ = ablate_layers(
+        X,
+        samples,
+        feature_names,
+        n_folds=folds,
+        embargo_hours=(embargo_hours if embargo_hours is not None else cfg.split.embargo_hours),
+        seed=cfg.project.seed,
+        model_names=tuple(m.strip() for m in models.split(",")),
+        lstm_overrides={"max_epochs": max_epochs} if max_epochs else None,
+    )
+    if table.empty:
+        typer.secho("no usable layer cases (single-class cells / embargo wiped folds)", fg="red")
+        raise typer.Exit(code=1)
+    table.to_csv(out_dir / "layer_ablation.csv", index=False)
+    for model in table["model"].unique():
+        for label_col in table["label_col"].unique():
+            layer_case_bar_chart(
+                table, out_dir / f"tss_by_case_{model}_{label_col}.png", model, label_col
+            )
+
+    show = ["case", "n_aia_channels", "label_col", "model", "tss_mean", "hss_mean", "bss_mean"]
+    typer.echo(table[show].round(4).to_string(index=False))
+    typer.echo(f"outputs: {out_dir}")
+    for _, row in table.iterrows():
+        append_experiment_row(
+            cfg.paths.experiment_log,
+            {
+                "phase": "P5",
+                "experiment": f"layer_ablation_{tag}",
+                "case": row["case"],
+                "n_aia_channels": int(row["n_aia_channels"]),
+                "label_col": row["label_col"],
+                "model": row["model"],
+                "tss_mean": round(float(row["tss_mean"]), 4),
+                "hss_mean": round(float(row["hss_mean"]), 4),
+                "bss_mean": round(float(row["bss_mean"]), 4),
+                "config_hash": cfg.short_hash(),
+            },
+        )
+
+
 @app.command("render-video")
 def render_video(
     sample_dir: Annotated[Path, typer.Option("--sample-dir", exists=True, file_okay=False)],
@@ -1107,6 +1215,46 @@ def render_dashboard_cmd(
     )
     out_dir = out or Path(cfg.paths.outputs_dir) / "dashboard" / window
     mp4, n = render_dashboard(cfg, window, out_dir, fitted, note, fps=fps)
+    typer.echo(f"clip:   {mp4}  ({n} frames)")
+    typer.echo(f"frames: {out_dir / 'frames'}")
+
+
+@app.command("render-region-summary")
+def render_region_summary_cmd(
+    window: Annotated[str, typer.Option("--window", "-w")],
+    config: ConfigOpt = DEFAULT_CONFIG,
+    dataset: Annotated[
+        Path, typer.Option(help="Sequence dataset used to fit the probability model")
+    ] = Path("data/datasets/seq_v1"),
+    model: Annotated[str, typer.Option(help="holt_winters | lstm")] = "holt_winters",
+    fps: Annotated[int, typer.Option()] = 4,
+    size: Annotated[int, typer.Option(help="Disk panel size in px")] = 820,
+    out: Annotated[Path | None, typer.Option()] = None,
+) -> None:
+    """Operational NOAA SWPC-style Solar Region Summary: PNG frames + MP4 clip."""
+    import numpy as np
+    import pandas as pd
+
+    from solarflare.forecast.validate import fit_model, make_models
+    from solarflare.viz.regionsummary import render_region_summary
+
+    cfg = _load(config)
+    data = np.load(dataset / "X.npz", allow_pickle=False)
+    X = data["X"]
+    names = [str(n) for n in data["feature_names"]]
+    samples = pd.read_parquet(dataset / "samples.parquet")
+    y = samples["label"].to_numpy(dtype=int)
+    order = np.argsort(pd.to_datetime(samples["t0"]).to_numpy(), kind="stable")
+    cut = max(int(0.8 * len(order)), 1)
+    factories = make_models(names, horizon_steps=X.shape[1], seed=cfg.project.seed)
+    fitted = fit_model(
+        factories[model], X[order[:cut]], y[order[:cut]], X[order[cut:]], y[order[cut:]]
+    )
+    note = f"model: {model} fitted on {dataset.name} (n={len(samples)}, pos={int(y.sum())})" + (
+        "  [MVP - anecdotal sample size]" if len(samples) < 200 else ""
+    )
+    out_dir = out or Path(cfg.paths.outputs_dir) / "region_summary" / window
+    mp4, n = render_region_summary(cfg, window, out_dir, fitted, note, fps=fps, size=size)
     typer.echo(f"clip:   {mp4}  ({n} frames)")
     typer.echo(f"frames: {out_dir / 'frames'}")
 

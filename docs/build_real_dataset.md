@@ -89,5 +89,5 @@ Holt-Winters in CV (Gate G4) and whether probabilities are calibrated (BSS ≥ 0
   time the first time so a single failure doesn't waste a long run.
 - A window can fail mid-export (JSOC maintenance); just re-run — completed
   windows are skipped.
-- This driver does **not** touch YOLO/detection — `build-dataset` uses the
-  threshold masks from `segment-sample`, which is all the forecasting path needs.
+- This driver does **not** touch the full-disk export — `build-dataset` uses the
+  per-AR HMI masks from `segment-sample`, which is all the forecasting path needs.

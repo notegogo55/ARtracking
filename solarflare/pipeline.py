@@ -120,7 +120,7 @@ def run_all(
     record(
         "segment",
         t0,
-        method=cfg.segment.method,
+        model=cfg.segment.model,
         median_ar_pixels=int(np.median(masks.sum(axis=(1, 2)))),
     )
 
@@ -153,6 +153,8 @@ def run_all(
         lon_series=lon_series,
         max_lon_deg=cfg.geometry.max_cm_longitude_deg,
         min_valid_fraction=cfg.features.min_valid_fraction,
+        lead_grid=cfg.forecast.lead_grid,
+        class_grid=cfg.forecast.class_grid,
     )
     out_root = out_root or Path(cfg.paths.outputs_dir) / "runs" / (
         f"{window_name}_{cfg.short_hash()}"

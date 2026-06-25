@@ -83,23 +83,18 @@ qa:
   min_coverage: 0.6         # flag reprojected frames covering less of the CEA grid
 
 detect:
-  bootstrap_cadence_hours: 6      # label rows + full-disk frame cadence
+  # HARP-box query cadence (tracking, sequence builder, full-disk views) and the
+  # bounded full-disk magnetogram export that the full-disk visualizations overlay.
+  bootstrap_cadence_hours: 6      # HARP-box rows + full-disk frame cadence
   fulldisk_series: hmi.m_720s
   fulldisk_segment: magnetogram
   rebin_scale: 0.25               # JSOC-side rebin: 4096 -> 1024 px (verified live)
-  image_clip_gauss: 300           # +/- clip for 8-bit PNG conversion
-  min_box_arcsec: 20              # drop degenerate HARP boxes
-  yolo_model: data/weights/yolo26n.pt  # pretrained nano model (transfer learning; YOLO26 = NMS-free e2e)
-  yolo_imgsz: 640
-  yolo_epochs: 40
-  # Window-blocked splits: train on Cycle-24 windows + quiet negatives,
-  # validate on Sep 2017, hold out Cycle-25 May 2024 for the gate report.
-  train_windows: [ar11158_feb2011, ar11429_mar2012, ar12192_oct2014, quiet_dec2019]
-  val_windows: [ar12673_sep2017]
-  test_windows: [ar13664_may2024]
 
 segment:
-  method: unet               # threshold | unet (unet needs `solarflare train-unet` first)
+  # Pluggable Segmenter (solarflare.detect.segmenter registry); one-line swap.
+  #   threshold | unet | surya | sam2   (unet needs `solarflare train-unet` first;
+  #   surya/sam2 are stubs that raise with setup guidance -- need a GPU + weights).
+  model: unet
   spot_threshold: 0.85            # continuum < 0.85 x quiet-Sun median => sunspot
   bfield_threshold_gauss: 100     # |B_los| > 100 G => active pixel
   min_region_pixels: 64
@@ -116,6 +111,13 @@ segment:
   unet_val_fraction: 0.2
   unet_prob_threshold: 0.5
   unet_weights: outputs/segment/unet/unet_best.pt
+  # Foundation segmenters (model: surya | sam2) — GPU-gated, fall back with guidance.
+  foundation_device: cuda                 # "cpu" forces a very slow CPU run
+  foundation_prob_threshold: 0.5
+  surya_weights: data/weights/surya/ar_segmentation_weights.pth
+  sam2_hf_id: facebook/sam2-hiera-large
+  # sam2_checkpoint: data/weights/sam2/sam2.1_hiera_large.pt   # local .pt (else from_pretrained)
+  # sam2_model_cfg: configs/sam2.1/sam2.1_hiera_l.yaml         # local cfg (else from_pretrained)
 
 track:
   iou_threshold: 0.2              # min rotation-compensated IoU to link boxes
@@ -127,9 +129,13 @@ features:
 
 forecast:
   lookback_hours: 24           # feature history fed to the model
-  lead_hours: 24               # forecast horizon; features end strictly before this window
-  flare_class_threshold: M1.0  # positive label: >= M1.0 within lead window
+  lead_hours: 24               # primary forecast horizon; features end strictly before this window
+  flare_class_threshold: M1.0  # primary positive label: >= M1.0 within lead window
   bin_hours: 24                # bin size for the climatological base rate
+  # Evaluation grid (M3): extra horizons/classes labeled + scored per cell (label_{H}h_{C}).
+  # Empty -> just the primary cell. Proposal grid = {24,72}h x {>=M,>=X}:
+  lead_hours_grid: []          # e.g. [24, 72]
+  flare_classes_grid: []       # e.g. [M1.0, X1.0]
 
 geometry:
   max_cm_longitude_deg: 65     # restrict ARs to +/-65 deg of central meridian

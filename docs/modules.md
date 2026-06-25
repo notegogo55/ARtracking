@@ -30,14 +30,22 @@ column-set may grow).
 ## `solarflare.detect`, `solarflare.track` — stage B
 - `bootstrap`: AR boxes from HARP keywords (Stonyhurst bounds), projection to
   full-disk pixels through the map WCS (handles CROTA2=180).
-- `segment`: threshold+morphology sunspot/active/AR masks; `segment_sample`
-  writes `ar_masks.npy` + areas + QA plot; `segment_sample_auto` dispatches
-  threshold vs U-Net on `segment.method`.
-- `unet`: U-Net upgrade (segmentation-models-pytorch) trained on the threshold
-  masks as pseudo-labels, time-blocked per-sample split (`train_unet`,
+- `segmenter`: pluggable `Segmenter` interface + registry (`get_segmenter`,
+  `available_segmenters`); `segment.model` ∈ `threshold | unet | surya | sam2`
+  resolves to a class. All four write the same `ar_masks.npy` + `ar_mask_areas.csv`.
+- `segment`: the "threshold" Segmenter — threshold+morphology sunspot/active/AR
+  masks; `segment_sample` writes `ar_masks.npy` + areas + QA plot;
+  `segment_sample_auto` dispatches via the registry on `segment.model`.
+- `unet`: the "unet" Segmenter (segmentation-models-pytorch) trained on the
+  threshold masks as pseudo-labels, time-blocked per-sample split (`train_unet`,
   `segment_sample_unet` — same output files as the baseline).
-- `dataset` / `yolo`: bounded rebinned full-disk YOLO dataset with
-  window-blocked splits; Ultralytics (YOLO26n) fine-tune/predict/eval-vs-SHARP.
+- `foundation`: the GPU-gated `surya` and `sam2` Segmenters. Surya runs its
+  `ar_segmentation` head (decode/write path testable via an injected `backbone`);
+  SAM2 seeds frame 0 with the HMI mask bbox and propagates the mask across frames
+  (`segment_sample_surya`, `segment_sample_sam2`). Each loader checks CUDA + the
+  model package + weights and falls back with setup guidance when absent.
+- `fulldisk`: bounded JSOC-rebinned (4096→1024) full-disk magnetogram export
+  per window (`fetch_fulldisk_frames`), cached for the full-disk overlays.
 - `track.iou`: rotation-compensated temporal-IoU tracker (`track_boxes`),
   time-based gap budget, majority-vote HARP attachment, `track_report`.
 
@@ -46,8 +54,9 @@ column-set may grow).
   right-edge-labeled `resample_features`, backward `add_gradients`,
   `build_frame_pipeline` (the leak-safe chain).
 - `dataset`: `build_sequences` (sliding windows ≤ t0, longitude gate,
-  validity filter, strict label boundaries), `write_dataset` (npz + parquet +
-  data dictionary + stats).
+  validity filter, strict label boundaries; emits per-cell `label_{H}h_{C}` for
+  the `lead_grid`×`class_grid`), `write_dataset` (npz + parquet + data dictionary
+  + stats incl. per-cell positive counts).
 
 ## `solarflare.forecast` — stage D
 - `baselines`: `ClimatologyForecaster`, `HoltWintersForecaster` (Holt trend +
@@ -55,16 +64,27 @@ column-set may grow).
 - `lstm`: `LSTMForecaster` (pos-weighted BCE, early stop on val TSS,
   train-only standardization, training-curve artifacts).
 - `validate`: `time_blocked_folds` (chronological + embargo),
-  `crossval_table`, `holdout_evaluate` (frozen thresholds), reliability/ROC
-  plots, `aggregate_table`.
+  `crossval_table`, `crossval_grid` (per {horizon×class} cell) + `grid_label_columns`,
+  `holdout_evaluate` (frozen thresholds), reliability/ROC plots, `aggregate_table`.
 - `swansf`: streaming SWAN-SF adapter (see reproducibility gotchas).
-- `ablation`: grouped permutation importance + drop-one retrain.
+- `ablation`: grouped permutation importance + drop-one retrain; the 6-case
+  atmospheric-layer matrix (`LAYER_CASES`, `case_feature_indices`, `ablate_layers`,
+  `layer_case_bar_chart`) — dynamic channel masking scored per {horizon×class} cell.
 
 ## `solarflare.eval`, `solarflare.viz`, `solarflare.pipeline` — stage E
 - `eval.metrics`: contingency, TSS/HSS/BSS/Brier, `best_tss_threshold`
   (validation-only), reliability curve, `summarize`.
 - `viz.overlay`: sample QA overlay (magnetogram + reprojected AIA + B_los
   contours), flare-peak frame picker.
+- `viz.regionsummary`: **primary visualization** — operational NOAA SWPC-style
+  Solar Region Summary (gray magnetogram disk + risk-colored AR boxes + a
+  per-AR summary table: NOAA/HARP, Stonyhurst location, extent, `P(≥M, 24h)`
+  risk band). Frames + MP4 (`render-region-summary`).
+- `viz.dashboard`: legacy DeepFlareNet-style per-box probability dashboard
+  (`render-dashboard`); shares `build_probability_lookup` with regionsummary.
+- `viz.harpmap`: JSOC-style tracked-HARP full-disk map (`render-harpmap`).
+- `viz.video`: per-sample multi-wavelength panels + mask contours, browser-
+  playable H.264 MP4 (`Mp4Writer`, `render-video`).
 - `pipeline`: `run_all` (stages A→E, per-stage cache plan, manifest,
   reproducibility keys).
 

@@ -113,9 +113,14 @@ class FeaturesConfig(_StrictModel):
 
 class ForecastConfig(_StrictModel):
     lookback_hours: float = Field(default=24, gt=0)
-    lead_hours: float = Field(default=24, gt=0)
-    flare_class_threshold: str = "M1.0"
+    lead_hours: float = Field(default=24, gt=0)  # primary horizon
+    flare_class_threshold: str = "M1.0"  # primary class threshold
     bin_hours: float = Field(default=24, gt=0)
+    # Evaluation grid (M3): extra horizons/classes for multi-cell labeling + metrics.
+    # Empty -> just the primary (lead_hours x flare_class_threshold). Example for the
+    # proposal's {24,72}h x {>=M,>=X}:  lead_hours_grid: [24, 72]; flare_classes_grid: [M1.0, X1.0]
+    lead_hours_grid: list[float] = Field(default_factory=list)
+    flare_classes_grid: list[str] = Field(default_factory=list)
 
     @field_validator("flare_class_threshold")
     @classmethod
@@ -125,33 +130,62 @@ class ForecastConfig(_StrictModel):
         goes_class_to_flux(v)  # raises ValueError if malformed
         return v
 
+    @field_validator("lead_hours_grid")
+    @classmethod
+    def _leads_positive(cls, v: list[float]) -> list[float]:
+        if any(h <= 0 for h in v):
+            raise ValueError("lead_hours_grid entries must be > 0")
+        return v
+
+    @field_validator("flare_classes_grid")
+    @classmethod
+    def _grid_classes_parse(cls, v: list[str]) -> list[str]:
+        from solarflare.data.goes_events import goes_class_to_flux
+
+        for c in v:
+            goes_class_to_flux(c)  # raises ValueError if malformed
+        return v
+
+    @property
+    def lead_grid(self) -> list[float]:
+        """Horizons to label/evaluate (defaults to the primary lead_hours)."""
+        return self.lead_hours_grid or [self.lead_hours]
+
+    @property
+    def class_grid(self) -> list[str]:
+        """Class thresholds to label/evaluate (defaults to the primary threshold)."""
+        return self.flare_classes_grid or [self.flare_class_threshold]
+
 
 class DetectConfig(_StrictModel):
-    """Stage B detection: HARP-bootstrapped labels + YOLO fine-tuning."""
+    """Stage B: HARP-bootstrapped AR boxes + bounded full-disk frames.
+
+    `bootstrap_cadence_hours` sets the HARP-box query cadence (used by tracking,
+    the sequence builder, and the full-disk views). The `fulldisk_*` / `rebin_scale`
+    keys parameterize the bounded full-disk magnetogram export (`fetch-fulldisk`)
+    that the operational full-disk visualizations overlay HARP boxes onto.
+    """
 
     bootstrap_cadence_hours: int = Field(default=6, gt=0)
     fulldisk_series: str = "hmi.m_720s"
     fulldisk_segment: str = "magnetogram"
     rebin_scale: float = Field(default=0.25, gt=0, le=1)  # 4096 px -> 1024 px
-    image_clip_gauss: float = Field(default=300.0, gt=0)
-    min_box_arcsec: float = Field(default=20.0, ge=0)
-    yolo_model: str = "data/weights/yolo26n.pt"
-    yolo_imgsz: int = Field(default=640, gt=0)
-    yolo_epochs: int = Field(default=40, gt=0)
-    # Window-blocked splits (never random): names must reference study windows.
-    train_windows: list[str] = Field(default_factory=list)
-    val_windows: list[str] = Field(default_factory=list)
-    test_windows: list[str] = Field(default_factory=list)
 
 
 class SegmentConfig(_StrictModel):
-    """Stage B segmentation: threshold baseline or trained U-Net behind the same interface.
+    """Stage B segmentation: a pluggable `Segmenter` chosen by `model`.
+
+    Implementations live in `solarflare.detect.segmenter` and are resolved via
+    its registry, so swapping models is this one line:
+      - "threshold": intensity/|B| threshold + morphology (no training, no GPU);
+      - "unet":      U-Net distilled from the threshold masks (`train-unet` first);
+      - "surya"/"sam2": stubs that raise with setup guidance (GPU + weights).
 
     The U-Net is trained on the threshold masks as pseudo-labels (no hand labels
     exist), with a time-blocked train/val split per sample (no leakage).
     """
 
-    method: Literal["threshold", "unet"] = "threshold"
+    model: Literal["threshold", "unet", "surya", "sam2"] = "threshold"
     spot_threshold: float = Field(default=0.85, gt=0, lt=1)  # fraction of quiet-Sun median
     bfield_threshold_gauss: float = Field(default=100.0, gt=0)
     min_region_pixels: int = Field(default=64, ge=1)
@@ -167,6 +201,14 @@ class SegmentConfig(_StrictModel):
     unet_val_fraction: float = Field(default=0.2, gt=0, lt=1)  # tail frames of each sample
     unet_prob_threshold: float = Field(default=0.5, gt=0, lt=1)
     unet_weights: Path = Path("outputs/segment/unet/unet_best.pt")
+    # --- foundation segmenters (surya / sam2), used when model in {"surya","sam2"} ---
+    # GPU-gated: each loader raises clear setup guidance when CUDA/weights are absent.
+    foundation_device: str = "cuda"  # "cpu" forces a (very slow) CPU run
+    foundation_prob_threshold: float = Field(default=0.5, gt=0, lt=1)
+    surya_weights: Path = Path("data/weights/surya/ar_segmentation_weights.pth")
+    sam2_hf_id: str = "facebook/sam2-hiera-large"
+    sam2_checkpoint: Path | None = None  # local .pt (else from_pretrained(sam2_hf_id))
+    sam2_model_cfg: str | None = None  # local model cfg (else from_pretrained)
 
     @field_validator("unet_tile_px")
     @classmethod
@@ -225,17 +267,6 @@ class Config(_StrictModel):
     geometry: GeometryConfig = GeometryConfig()
     split: SplitConfig = SplitConfig()
     climatology: ClimatologyConfig
-
-    @model_validator(mode="after")
-    def _detect_splits_valid(self) -> Config:
-        names = {w.name for w in self.study.windows}
-        splits = self.detect.train_windows + self.detect.val_windows + self.detect.test_windows
-        unknown = set(splits) - names
-        if unknown:
-            raise ValueError(f"detect split windows not in study.windows: {sorted(unknown)}")
-        if len(splits) != len(set(splits)):
-            raise ValueError("detect train/val/test windows must be disjoint")
-        return self
 
     def short_hash(self) -> str:
         """Stable 8-char hash of the resolved config, for experiment logging."""

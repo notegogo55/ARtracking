@@ -159,6 +159,33 @@ def test_subsample_sharp_noop_when_already_hourly():
     assert _subsample_sharp_files(files, start, end, 720, ["magnetogram", "continuum"]) == files
 
 
+def test_subsample_sharp_restricts_trec_to_window():
+    """A dir staged for a whole window is trimmed to the requested sub-range."""
+    # 3 days of hourly T_REC stamps; request only the middle day (05-10).
+    stamps = [f"202405{d:02d}_{h:02d}0000" for d in (9, 10, 11) for h in range(24)]
+    files = _sharp_names(stamps, style="trec")  # 72 timestamps x 2 segments
+    out = _subsample_sharp_files(
+        files,
+        datetime(2024, 5, 10),
+        datetime(2024, 5, 10, 23),
+        3600,
+        ["magnetogram", "continuum"],
+    )
+    days = {Path(p).name.split(".")[3][:8] for p in out}
+    assert days == {"20240510"}  # 05-09 and 05-11 are dropped
+    assert len(out) == 2 * 24  # all 24 hours of 05-10, both segments
+
+
+def test_subsample_sharp_window_keeps_recnum():
+    """recnum-style names carry no parseable date, so the window filter keeps them."""
+    stamps = [f"{700000 + i}" for i in range(48)]
+    files = _sharp_names(stamps, style="recnum")
+    out = _subsample_sharp_files(
+        files, datetime(2024, 5, 10), datetime(2024, 5, 11), None, ["magnetogram", "continuum"]
+    )
+    assert out == files
+
+
 def test_fetch_with_retry_recovers_from_transient(monkeypatch):
     monkeypatch.setattr("solarflare.data.jsoc_fetch.time.sleep", lambda *_: None)
     calls = {"n": 0}

@@ -1,9 +1,16 @@
 # solarflare — AR tracking & ≥M-class flare forecasting (offline pipeline)
 
-Offline, reproducible pipeline over SDO data: detect & segment active regions on
-**HMI** → track them in time → project boundaries onto **AIA** multi-wavelength
-images → extract per-AR time series → forecast the probability of a **≥M-class**
-flare (DeepFlareNet-style), evaluated with **TSS** on time-blocked splits.
+**Core concept.** Each active region is segmented **once** on the **HMI**
+magnetogram — its photospheric magnetic root — and that **single mask is
+propagated upward** onto every **AIA** wavelength (lower & upper chromosphere →
+transition region → corona). Reading the same region across every layer over
+time, the model learns the vertical magnetic–thermal coupling that separates
+flaring from non-flaring regions. Everything below is built on that one mask.
+
+Offline, reproducible pipeline over SDO data: segment & track active regions on
+**HMI** → propagate the mask onto **AIA** multi-wavelength images → extract
+per-AR cross-layer time series → forecast the probability of a **≥M-class** flare
+(DeepFlareNet-style), evaluated with **TSS** on time-blocked splits.
 
 **Docs**: [architecture](docs/architecture.md) ·
 [reproducibility guide](docs/reproducibility.md) (env, seeds, exact commands,
@@ -17,9 +24,9 @@ fixture-based suite on Linux + Windows (`.github/workflows/ci.yml`).
 ```
 solarflare/        package
   data/            Stage A: SHARP/AIA cutouts, GOES labels        (Phase A)
-  detect/          Stage B: AR detection & segmentation           (Phase B)
+  detect/          Stage B: AR segmentation (one HMI-rooted mask) (Phase B)
   track/           Stage B: temporal IoU tracking                 (Phase B)
-  features/        Stage C: WCS co-registration, per-AR features  (Phase C)
+  features/        Stage C: mask propagation, per-AR features     (Phase C)
   forecast/        Stage D: climatology (here), Holt-Winters, LSTM
   eval/            Stage E: TSS / HSS / BSS / reliability         (Phase D/E)
   viz/             Stage E: plots & overlays                      (Phase E)
@@ -31,11 +38,12 @@ scripts/           thin wrappers around CLI commands
 tests/             offline pytest suite (synthetic fixtures, no downloads)
 docs/              architecture, reproducibility, module reference, build prompts
 reports/           written reports + tracked figures
-data/              (untracked) raw FITS, caches, datasets; data/weights/ = YOLO base
+data/              (untracked) raw FITS, caches, datasets
 outputs/           (untracked) experiment artifacts:
   logs/            run logs            figures/   one-off QA images
-  forecast/        metric CSVs+plots   detect/    trained YOLO weights
-  dashboard/       prob-dashboard MP4  harpmap/   full-disk HARP-map MP4
+  forecast/        metric CSVs+plots   segment/   trained U-Net weights
+  region_summary/  SWPC-style MP4      harpmap/   full-disk HARP-map MP4
+  dashboard/       prob-dashboard MP4  (legacy DeFN-style per-box view)
   runs/            run-all manifests   tracks/    tracker outputs
 ```
 
@@ -141,43 +149,52 @@ Offline/CI mode: `solarflare base-rate --events-csv tests/fixtures/goes_events_s
 Results are appended to `outputs/experiments.csv` (timestamp, git SHA, config
 hash, metrics).
 
-## Phase 2: detection, segmentation & tracking
+## Phase 2: segmentation & tracking (the magnetic-root mask)
 
-- **Bootstrap labels** (`solarflare bootstrap-boxes`): AR boxes from HARP
+- **Bootstrap references** (`solarflare bootstrap-boxes`): AR boxes from HARP
   metadata via keyword-only JSOC queries (Stonyhurst LON/LAT_MIN/MAX, semantics
-  verified live) — no hand-labeling, no image downloads.
-- **Segmentation** (`solarflare segment-sample`): threshold + morphology
-  baseline (continuum < 0.85×quiet median OR |B_los| > 100 G) → per-frame AR
-  masks cached next to the sample (`ar_masks.npy`). **U-Net** upgrade
-  (`solarflare train-unet`, segmentation-models-pytorch, ResNet-18 encoder) is
-  now the default (`segment.method: unet`): it distills the threshold masks as
-  pseudo-labels with a time-blocked per-sample split. Trained on AR 11158 it
-  reaches **val IoU 0.90**; on the unseen AR 11429 it agrees with the threshold
-  baseline at pooled IoU 0.91 (generalizes across ARs). Both methods write the
-  same files behind `segment_sample_auto`, so Phase C is unchanged.
+  verified live) — no hand-labeling, no image downloads. They seed tracking and
+  the full-disk HARP overlay; AIA cropping is HARP-first.
+- **Segmentation** (`solarflare segment-sample`): a pluggable `Segmenter`
+  (`solarflare/detect/segmenter.py` registry) chosen by **one config line** —
+  `segment.model: threshold | unet | surya | sam2`. The AR is segmented **once
+  on HMI** into the per-frame mask cached next to the sample (`ar_masks.npy`) —
+  the single mask Phase C propagates to every AIA layer. `threshold` +
+  morphology (continuum < 0.85×quiet median OR |B_los| > 100 G) is the zero-ML
+  smoke baseline. **U-Net** (`solarflare train-unet`, segmentation-models-pytorch,
+  ResNet-18 encoder) is the default (`segment.model: unet`): it distills the
+  threshold masks as pseudo-labels with a time-blocked per-sample split. Trained
+  on AR 11158 it reaches **val IoU 0.90**; on the unseen AR 11429 it agrees with
+  the threshold baseline at pooled IoU 0.91 (generalizes across ARs). `surya`
+  (NASA-IMPACT Surya `ar_segmentation`) and `sam2` (Meta SAM2 propagation) are
+  GPU-gated implementations that fall back with setup guidance when no GPU/weights
+  are present. Every implementation writes the same files behind
+  `segment_sample_auto`, so swapping the model never touches Phase C.
 - **Tracking** (`solarflare track-window`): temporal IoU with Howard synodic
   differential-rotation compensation, time-based gap budget, HARP attachment.
   Oct 2014 multi-AR demo: 39 tracks / 338 boxes, **HARP purity 1.0 (zero ID
   switches)**, AR 12192 mean compensated IoU 0.946.
-- **Detection** (`build-detect-dataset` / `train-detect` / `eval-detect`):
-  **YOLO26n** (NMS-free end-to-end, Ultralytics 8.4; auto-downloaded, not
-  committed) fine-tuned on 143 rebinned 1024² full-disk magnetograms
-  (window-blocked splits, quiet-Sun negatives). Gate G2 vs the SHARP-derived
-  boxes (match IoU 0.5):
+- **Full-disk frames** (`solarflare fetch-fulldisk -w <window>`): a bounded,
+  JSOC-rebinned (4096→1024) full-disk magnetogram export per window, cached under
+  `data/raw/fulldisk/<window>/`. The operational full-disk views overlay the
+  tracked HARP boxes on these frames.
 
-  | split (held-out window) | conf | recall | precision | matched IoU (mean) |
-  |---|---|---|---|---|
-  | val — Sep 2017 | 0.25 | 0.59 | 0.84 | 0.85 |
-  | val — Sep 2017 | 0.10 | 0.80 | 0.67 | 0.83 |
-  | test — May 2024 | 0.25 | 0.44 | 0.66 | 0.84 |
-  | test — May 2024 | 0.10 | 0.54 | 0.45 | 0.83 |
+**Foundation-model segmenters (GPU, optional).** `segment.model: surya` and
+`segment.model: sam2` (`solarflare/detect/foundation.py`) plug into the same
+contract, GPU-gated so the offline `unet`/`threshold` path never breaks:
 
-  Vs the earlier YOLO11n baseline (val R0.88/P0.92, test R0.61/P0.45): YOLO26n
-  produces **tighter boxes** (matched IoU 0.83–0.85 > 0.80–0.83) but lower
-  recall at the same confidence — its NMS-free head needs a lower `conf` to
-  recover recall, a known small-data symptom (143 training frames). Decision:
-  keep YOLO26n and re-train once more AR windows are fetched. Cropping AIA
-  remains HARP-first; the detector is the no-SHARP generalization path.
+- **SAM2** (`facebookresearch/sam2`): seeds frame 0 with the HMI mask bbox (the
+  magnetic root) and propagates it across frames. On a GPU box: `pip install` SAM2,
+  set `segment.foundation_device: cuda` (default), optionally a local
+  `sam2_checkpoint` + `sam2_model_cfg` (else `from_pretrained(sam2_hf_id)`).
+- **Surya** (`NASA-IMPACT/Surya`, `ar_segmentation`): its downstream ships a
+  full-disk `infer.py` (13-channel 4096²), so the loader exposes a `backbone`
+  injection point and points at `infer.py` + the fine-tuned weights
+  (`segment.surya_weights`) rather than guessing a per-cutout API.
+
+Without a CUDA GPU / weights / the package, each raises a one-line setup-guidance
+message; swapping back to `unet` is one config line. The decode→`ar_masks.npy`
+write path is unit-tested offline (`tests/test_foundation.py`) via a fake backbone.
 
 ## Phase 3: features & labeled sequences
 
@@ -236,6 +253,14 @@ data/datasets/seq_v1 --embargo-hours 2`); with the current 2-AR set (n=135,
 but only 2 ARs / 2 disk passages) those numbers are integration proof, not
 evidence — the SWAN-SF results above are the real Phase-4 read.
 
+**Multi-horizon × multi-class grid (24/72 h × ≥M/≥X).** Set
+`forecast.lead_hours_grid: [24, 72]` and `forecast.flare_classes_grid: [M1.0, X1.0]`;
+`build-dataset` then emits a leakage-safe `label_{H}h_{C}` column per cell (the
+primary `label` aliases the `lead_hours`×`flare_class_threshold` cell, so a scalar
+config reproduces the old result). `solarflare forecast-grid --dataset <ds>` scores
+TSS/HSS/BSS + a reliability diagram for every cell (degenerate single-class cells —
+e.g. ≥X on the thin own-data set — are skipped with a warning).
+
 ## Phase 5: integration, evaluation & ablation (Gate G5 closed 2026-06-11)
 
 - **One command end-to-end**: `solarflare run-all -w ar11158_feb2011` chains
@@ -255,8 +280,34 @@ evidence — the SWAN-SF results above are the real Phase-4 read.
   the correlated-features caveat documented. The same harness on the small
   2-AR own-data set runs but yields no signal (reported as anecdotal, no
   conclusion until more AR windows are fetched).
+- **Atmospheric-layer ablation** (`solarflare ablate-layers`): the proposal's
+  6-case matrix — HMI is always the magnetic root, and each case dynamically masks
+  the feature matrix to a layer subset (no re-fetch): **(1)** HMI only · **(2)**
+  +1600/304 (low atmosphere) · **(3)** +171/193/211 (quiet corona) · **(4)** +94/131
+  (flaring corona) · **(5)** +171/94 (core synergy) · **(6)** + all AIA (full
+  spectrum). Each case is scored on the full {horizon×class} grid (TSS/HSS/BSS) with
+  a TSS-by-case bar chart, quantifying the minimal-channel-set vs accuracy trade-off
+  (expectation: the 94/131 thermal channels separate confined vs eruptive flares).
 - Evaluation report with tables + figures: `reports/report_phase5.md`
   (regenerate via `uv run python scripts/build_report.py`).
+
+## Visualization: operational Solar Region Summary (primary view)
+
+`solarflare render-region-summary -w <window>` renders the headline
+visualization: a **NOAA SWPC-style Solar Region Summary** — a grayscale HMI
+full-disk magnetogram with each tracked AR boxed and color-coded by a four-level
+flare **risk** (Low / Moderate / High / Very-High), beside a region-summary
+**table** listing every region's NOAA/HARP id, Stonyhurst location (e.g.
+`N15W20`), heliographic extent and `P(≥M, 24h)` as a risk bar — PNG frames + an
+MP4 clip (`solarflare/viz/regionsummary.py`). The single calibrated ≥M
+probability per AR drives the risk band (no fabricated C/M/X numbers); the footer
+names the model + dataset so a clip is never read as an operational forecast.
+On AR 11158 (2011-02-15) the X2.2 region shows up as a red **Very-High** box.
+
+This replaces the earlier DeepFlareNet-style per-box dashboard
+(`render-dashboard`, still available) as the recommended view. `render-harpmap`
+(JSOC-style tracked-HARP map) and `render-video` (per-sample multi-wavelength
+panels) are unchanged. Swapping is a CLI choice, not a code change.
 
 ## Results dashboard (Streamlit)
 
@@ -270,7 +321,7 @@ uv run --group app streamlit run app/main.py
 
 Pages: overview (key TSS numbers + pipeline status) · forecast runs ·
 feature importance · AR viewer (scrub frames, export MP4) · video gallery
-(`render-dashboard` / `render-harpmap` / sample clips) · experiment log ·
+(`render-region-summary` / `render-harpmap` / `render-dashboard` / sample clips) · experiment log ·
 reports. The app only reads `outputs/`, `reports/` and `data/cache/` — pages
 degrade to a hint when an artifact has not been generated yet.
 
